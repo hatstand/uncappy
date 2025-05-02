@@ -7,11 +7,9 @@ edition = "2021"
 
 [dependencies]
 defer = "0.2.1"
+env_logger = "0.11.8"
+log = "0.4.27"
 windows-core = "0.61.0"
-
-[dependencies.winapi]
-version = "0.3.9"
-features = ["winuser"]
 
 [dependencies.windows]
 version = "0.61.1"
