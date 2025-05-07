@@ -1,26 +1,45 @@
 use defer::defer;
 use log::{debug, error, info};
 use std::error::Error;
-use windows::Win32::Foundation::{GetLastError, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{GetLastError, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
     VIRTUAL_KEY, VK_CAPITAL, VK_ESCAPE,
 };
 use windows::Win32::UI::Shell::{
-    Shell_NotifyIconW, NIF_GUID, NIF_ICON, NIF_MESSAGE, NIM_ADD, NIM_DELETE, NIM_SETVERSION,
-    NOTIFYICONDATAW, NOTIFYICONDATAW_0, NOTIFYICON_VERSION_4,
+    Shell_NotifyIconGetRect, Shell_NotifyIconW, NIF_GUID, NIF_ICON, NIF_MESSAGE, NIM_ADD,
+    NIM_DELETE, NIM_SETVERSION, NOTIFYICONDATAW, NOTIFYICONDATAW_0, NOTIFYICONIDENTIFIER,
+    NOTIFYICON_VERSION_4,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyIcon, DispatchMessageW, GetMessageW,
-    LoadIconW, RegisterClassExW, SetWindowsHookExA, TranslateMessage, UnhookWindowsHookEx,
-    UnregisterClassW, CS_DBLCLKS, IDI_QUESTION, KBDLLHOOKSTRUCT, MSG, MSGFLT_ALLOW, WH_KEYBOARD_LL,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_KEYUP, WM_SYSKEYUP, WNDCLASSEXW,
+    CallNextHookEx, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon,
+    DispatchMessageW, GetMessageW, InsertMenuItemW, LoadIconW, RegisterClassExW,
+    SetForegroundWindow, SetWindowsHookExA, TrackPopupMenuEx, UnhookWindowsHookEx,
+    UnregisterClassW, IDI_QUESTION, KBDLLHOOKSTRUCT, MENUITEMINFOW, MFS_ENABLED, MFT_STRING,
+    MIIM_FTYPE, MIIM_STATE, MIIM_STRING, MSG, TPM_BOTTOMALIGN, TPM_RIGHTALIGN, WH_KEYBOARD_LL,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_KEYUP, WM_LBUTTONUP, WM_RBUTTONUP, WM_SYSKEYUP,
+    WNDCLASSEXW,
 };
-use windows_core::{GUID, PCWSTR};
+use windows_core::{GUID, PCWSTR, PWSTR};
 
 const UNCAPPY_TASKBAR_CB_ID: u32 = WM_APP + 1;
-const UNCAPPY_TASKBAR_ICON_ID: u32 = 42;
+
+pub fn LOWORD(l: isize) -> isize {
+    l & 0xffff
+}
+
+pub fn HIWORD(l: isize) -> isize {
+    (l >> 16) & 0xffff
+}
+
+pub fn GET_X_LPARAM(l: usize) -> i32 {
+    (l & 0xffff) as i32
+}
+
+pub fn GET_Y_LPARAM(l: usize) -> i32 {
+    ((l >> 16) & 0xffff) as i32
+}
 
 fn main() -> Result<(), Box<dyn Error>> {
     env_logger::init();
@@ -84,19 +103,19 @@ fn main() -> Result<(), Box<dyn Error>> {
         });
         let guid = GUID::new()?;
         debug!("adding to taskbar");
-        Shell_NotifyIconW(
-            NIM_ADD,
-            &mut NOTIFYICONDATAW {
-                cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
-                hWnd: window,
-                hIcon: icon,
-                guidItem: guid,
-                uFlags: NIF_ICON | NIF_MESSAGE | NIF_GUID,
-                uCallbackMessage: UNCAPPY_TASKBAR_CB_ID,
-                ..Default::default()
+        let notify_icon_data = &mut NOTIFYICONDATAW {
+            cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+            hWnd: window,
+            hIcon: icon,
+            guidItem: guid,
+            uFlags: NIF_ICON | NIF_MESSAGE | NIF_GUID,
+            uCallbackMessage: UNCAPPY_TASKBAR_CB_ID,
+            Anonymous: NOTIFYICONDATAW_0 {
+                uVersion: NOTIFYICON_VERSION_4,
             },
-        )
-        .ok()?;
+            ..Default::default()
+        };
+        Shell_NotifyIconW(NIM_ADD, notify_icon_data).ok()?;
         defer!({
             // Remove the icon when done.
             debug!("Removing taskbar icon");
@@ -110,18 +129,14 @@ fn main() -> Result<(), Box<dyn Error>> {
                 },
             );
         });
-        // debug!("Enabling better taskbar callbacks");
-        // Shell_NotifyIconW(
-        //     NIM_SETVERSION,
-        //     &mut NOTIFYICONDATAW {
-        //         cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
-        //         Anonymous: NOTIFYICONDATAW_0 {
-        //             uVersion: NOTIFYICON_VERSION_4,
-        //         },
-        //         ..Default::default()
-        //     },
-        // )
-        // .ok()?;
+        // Enable better callback API.
+        Shell_NotifyIconW(NIM_SETVERSION, notify_icon_data).ok()?;
+        let rect = Shell_NotifyIconGetRect(&mut NOTIFYICONIDENTIFIER {
+            cbSize: std::mem::size_of::<NOTIFYICONIDENTIFIER>() as u32,
+            guidItem: guid,
+            ..Default::default()
+        })?;
+        debug!("Taskbar icon rect: {:?}", rect);
 
         info!("Running...");
         loop {
@@ -129,7 +144,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             debug!("Waiting for message...");
             GetMessageW(&mut msg, None, 0, 0).ok()?;
             debug!("Message received: {:?}", msg);
-            // TranslateMessage(&msg).ok()?;
             debug!("dispatching message: {:?}", msg);
             DispatchMessageW(&msg);
         }
@@ -138,6 +152,32 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 const UNCAPPY_INFO: usize = (WM_APP + 0x4242) as usize;
 
+fn show_popup_menu(hwnd: HWND, x: i32, y: i32) -> Result<(), Box<dyn Error>> {
+    debug!("Showing popup menu at ({}, {})", x, y);
+    unsafe {
+        let menu = CreatePopupMenu()?;
+        debug!("Popup menu created: {:?}", menu);
+        InsertMenuItemW(
+            menu,
+            0,
+            true,
+            &mut MENUITEMINFOW {
+                cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
+                fMask: MIIM_FTYPE | MIIM_STATE | MIIM_STRING,
+                fType: MFT_STRING,
+                dwTypeData: PWSTR("Enable\0".encode_utf16().collect::<Vec<u16>>().as_mut_ptr()),
+                cch: "Enable".len() as u32,
+                fState: MFS_ENABLED,
+                ..Default::default()
+            },
+        )?;
+        // Required to ensure the popup menu disappears again when a user clicks elsewhere.
+        SetForegroundWindow(hwnd).ok()?;
+        TrackPopupMenuEx(menu, TPM_RIGHTALIGN.0 | TPM_BOTTOMALIGN.0, x, y, hwnd, None).ok()?;
+    }
+    Ok(())
+}
+
 unsafe extern "system" fn window_callback(
     hwnd: windows::Win32::Foundation::HWND,
     msg: u32,
@@ -145,12 +185,31 @@ unsafe extern "system" fn window_callback(
     lparam: LPARAM,
 ) -> LRESULT {
     debug!(
-        "Window callback: hwnd={:?}, msg={:#x}, wparam={:?}, lparam={:?}",
-        hwnd, msg, wparam, lparam
+        "Window callback: hwnd={:?}, msg={:#x}, wparam={:#x}, lparam={:#x}",
+        hwnd, msg, wparam.0, lparam.0
     );
     match msg {
         UNCAPPY_TASKBAR_CB_ID => {
             debug!("Taskbar icon message received");
+            match LOWORD(lparam.0) as u32 {
+                WM_LBUTTONUP => {
+                    debug!("Mouse click received");
+                }
+                WM_RBUTTONUP => {
+                    debug!("Right click received");
+                    let x = GET_X_LPARAM(wparam.0);
+                    let y = GET_Y_LPARAM(wparam.0);
+                    match show_popup_menu(hwnd, x, y) {
+                        Ok(_) => {
+                            debug!("Popup menu shown");
+                        }
+                        Err(err) => {
+                            error!("Failed to show popup menu: {:?}", err);
+                        }
+                    }
+                }
+                _ => {}
+            }
             LRESULT(0)
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
