@@ -8,17 +8,18 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VIRTUAL_KEY, VK_CAPITAL, VK_ESCAPE,
 };
 use windows::Win32::UI::Shell::{
-    Shell_NotifyIconW, NIF_ICON, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
+    Shell_NotifyIconW, NIF_GUID, NIF_ICON, NIF_MESSAGE, NIM_ADD, NIM_DELETE, NIM_SETVERSION,
+    NOTIFYICONDATAW, NOTIFYICONDATAW_0, NOTIFYICON_VERSION_4,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyIcon, GetMessageW, LoadIconW,
-    RegisterClassExW, SetWindowsHookExA, UnhookWindowsHookEx, UnregisterClassW, CS_DBLCLKS,
-    HWND_MESSAGE, IDI_QUESTION, KBDLLHOOKSTRUCT, MSG, WH_KEYBOARD_LL, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WM_APP, WM_KEYUP, WM_SYSKEYUP, WNDCLASSEXW,
+    CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyIcon, DispatchMessageW, GetMessageW,
+    LoadIconW, RegisterClassExW, SetWindowsHookExA, TranslateMessage, UnhookWindowsHookEx,
+    UnregisterClassW, CS_DBLCLKS, IDI_QUESTION, KBDLLHOOKSTRUCT, MSG, MSGFLT_ALLOW, WH_KEYBOARD_LL,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_KEYUP, WM_SYSKEYUP, WNDCLASSEXW,
 };
-use windows_core::PCWSTR;
+use windows_core::{GUID, PCWSTR};
 
-// const UNCAPPY_TASKBAR_CB_ID: usize = (WM_APP + 0x4243) as usize;
+const UNCAPPY_TASKBAR_CB_ID: u32 = WM_APP + 1;
 const UNCAPPY_TASKBAR_ICON_ID: u32 = 42;
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -29,10 +30,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let class_name = PCWSTR("Uncappy\0".encode_utf16().collect::<Vec<u16>>().as_ptr());
         let class = RegisterClassExW(&WNDCLASSEXW {
             cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-            style: CS_DBLCLKS,
             lpfnWndProc: Some(window_callback),
-            cbClsExtra: 0,
-            cbWndExtra: 0,
             hInstance: module.into(),
             lpszClassName: class_name,
             ..Default::default()
@@ -59,7 +57,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             0,
             0,
             0,
-            Some(HWND_MESSAGE),
+            None,
             None,
             Some(module.into()),
             None,
@@ -68,9 +66,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             error!("Failed to create window: {:?} {:?}", err, GetLastError());
         })?;
         debug!("Window created: {:?}", window);
-
-        // ShowWindow(window, SW_SHOWDEFAULT).ok()?;
-        // debug!("Window shown: {:?}", window);
 
         // Register a low-level keyboard hook that receives all keyboard events on the system.
         let hook_id = SetWindowsHookExA(WH_KEYBOARD_LL, Some(hook_callback), None, 0)?;
@@ -87,16 +82,17 @@ fn main() -> Result<(), Box<dyn Error>> {
             debug!("Destroying icon: {:?}", icon);
             let _ = DestroyIcon(icon);
         });
-        debug!("Setting up taskbar icon");
+        let guid = GUID::new()?;
+        debug!("adding to taskbar");
         Shell_NotifyIconW(
             NIM_ADD,
             &mut NOTIFYICONDATAW {
                 cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
                 hWnd: window,
-                uID: UNCAPPY_TASKBAR_ICON_ID,
                 hIcon: icon,
-                szTip: [0; 128],
-                uFlags: NIF_ICON | NIF_TIP,
+                guidItem: guid,
+                uFlags: NIF_ICON | NIF_MESSAGE | NIF_GUID,
+                uCallbackMessage: UNCAPPY_TASKBAR_CB_ID,
                 ..Default::default()
             },
         )
@@ -109,17 +105,33 @@ fn main() -> Result<(), Box<dyn Error>> {
                 &mut NOTIFYICONDATAW {
                     cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
                     hWnd: window,
-                    uID: UNCAPPY_TASKBAR_ICON_ID,
+                    guidItem: guid,
                     ..Default::default()
                 },
             );
         });
+        // debug!("Enabling better taskbar callbacks");
+        // Shell_NotifyIconW(
+        //     NIM_SETVERSION,
+        //     &mut NOTIFYICONDATAW {
+        //         cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+        //         Anonymous: NOTIFYICONDATAW_0 {
+        //             uVersion: NOTIFYICON_VERSION_4,
+        //         },
+        //         ..Default::default()
+        //     },
+        // )
+        // .ok()?;
 
         info!("Running...");
         loop {
             let mut msg = MSG::default();
+            debug!("Waiting for message...");
             GetMessageW(&mut msg, None, 0, 0).ok()?;
             debug!("Message received: {:?}", msg);
+            // TranslateMessage(&msg).ok()?;
+            debug!("dispatching message: {:?}", msg);
+            DispatchMessageW(&msg);
         }
     }
 }
@@ -132,21 +144,17 @@ unsafe extern "system" fn window_callback(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    // Handle messages sent to the taskbar icon.
-    if msg == WM_APP {
-        match wparam.0 as u32 {
-            UNCAPPY_TASKBAR_ICON_ID => {
-                // Handle taskbar icon messages here.
-                debug!("Taskbar icon message received");
-                return LRESULT(0);
-            }
-            _ => {
-                // Ignore other messages.
-                debug!("Unknown taskbar icon message: {:#x}", wparam.0 as u32);
-            }
+    debug!(
+        "Window callback: hwnd={:?}, msg={:#x}, wparam={:?}, lparam={:?}",
+        hwnd, msg, wparam, lparam
+    );
+    match msg {
+        UNCAPPY_TASKBAR_CB_ID => {
+            debug!("Taskbar icon message received");
+            LRESULT(0)
         }
+        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
-    DefWindowProcW(hwnd, msg, wparam, lparam)
 }
 
 // With reference to https://github.com/susam/uncap
