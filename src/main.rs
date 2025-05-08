@@ -154,12 +154,7 @@ impl Uncappy {
                     ShellExecuteW(
                         None,
                         PCWSTR(null_mut()),
-                        PCWSTR(
-                            "https://github.com/hatstand/uncappy\0"
-                                .encode_utf16()
-                                .collect::<Vec<u16>>()
-                                .as_ptr(),
-                        ),
+                        to_pcwstr("https://github.com/hatstand/uncappy"),
                         PCWSTR(null_mut()),
                         PCWSTR(null_mut()),
                         SW_SHOWNORMAL,
@@ -180,10 +175,7 @@ impl Uncappy {
             return Ok(*icon);
         }
         debug!("Loading icon: {}", icon_name);
-        let icon = LoadIconW(
-            Some(self.instance),
-            PCWSTR(icon_name.encode_utf16().collect::<Vec<u16>>().as_ptr()),
-        )?;
+        let icon = LoadIconW(Some(self.instance), to_pcwstr(icon_name))?;
         self.icon_cache.insert(icon_name.to_string(), icon);
         Ok(icon)
     }
@@ -299,12 +291,18 @@ fn string_to_tip(s: &str) -> [u16; 128] {
     ret
 }
 
+fn to_pcwstr(s: &str) -> PCWSTR {
+    let mut v = s.encode_utf16().collect::<Vec<u16>>();
+    v.push(0);
+    PCWSTR(v.as_ptr())
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     env_logger::init();
     unsafe {
         let module = GetModuleHandleW(None)?;
         // Register a window class for the taskbar icon.
-        let class_name = PCWSTR("Uncappy\0".encode_utf16().collect::<Vec<u16>>().as_ptr());
+        let class_name = to_pcwstr("Uncappy");
         let class = RegisterClassExW(&WNDCLASSEXW {
             cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
             lpfnWndProc: Some(window_callback),
@@ -323,12 +321,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let window = CreateWindowExW(
             WINDOW_EX_STYLE(0),
             PCWSTR(class as *const u16),
-            PCWSTR(
-                "Uncappy Window\0"
-                    .encode_utf16()
-                    .collect::<Vec<u16>>()
-                    .as_ptr(),
-            ),
+            to_pcwstr("Uncappy Window"),
             WINDOW_STYLE(0),
             0,
             0,
@@ -362,10 +355,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         debug!("Setting up taskbar icon");
         // hinstance as None implies loading from the system.
-        let icon = LoadIconW(
-            Some(module.into()),
-            PCWSTR("exit_icon\0".encode_utf16().collect::<Vec<u16>>().as_ptr()),
-        )?;
+        let icon = LoadIconW(Some(module.into()), to_pcwstr("exit_icon"))?;
         debug!("Icon loaded: {:?}", icon);
         debug!("adding to taskbar");
         let notify_icon_data = &mut NOTIFYICONDATAW {
