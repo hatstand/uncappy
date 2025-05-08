@@ -13,9 +13,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VIRTUAL_KEY, VK_CAPITAL, VK_ESCAPE,
 };
 use windows::Win32::UI::Shell::{
-    Shell_NotifyIconGetRect, Shell_NotifyIconW, NIF_GUID, NIF_ICON, NIF_INFO, NIF_MESSAGE,
-    NIF_SHOWTIP, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NIM_SETVERSION, NIN_SELECT,
-    NOTIFYICONDATAW, NOTIFYICONDATAW_0, NOTIFYICONIDENTIFIER, NOTIFYICON_VERSION_4,
+    Shell_NotifyIconGetRect, Shell_NotifyIconW, NIF_GUID, NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP,
+    NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NIM_SETVERSION, NIN_SELECT, NOTIFYICONDATAW,
+    NOTIFYICONDATAW_0, NOTIFYICONIDENTIFIER, NOTIFYICON_VERSION_4,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon,
@@ -67,6 +67,9 @@ struct Uncappy {
     mapping: MAPPING,
     guid: GUID,
 }
+
+const TOOLTIP_ENABLED: &str = "Mapping Caps Lock to Escape";
+const TOOLTIP_DISABLED: &str = "Mapping disabled";
 
 thread_local! {
     // The low-level keyboard hook has no way to receive user data.
@@ -184,8 +187,13 @@ impl Uncappy {
             &mut NOTIFYICONDATAW {
                 cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
                 hWnd: self.window,
-                uFlags: NIF_ICON | NIF_GUID,
+                uFlags: NIF_ICON | NIF_GUID | NIF_TIP | NIF_SHOWTIP,
                 guidItem: self.guid,
+                szTip: string_to_tip(if self.mapping == MAPPING::MapCapsToEscape {
+                    TOOLTIP_ENABLED
+                } else {
+                    TOOLTIP_DISABLED
+                }),
                 hIcon: icon,
                 ..Default::default()
             },
@@ -260,6 +268,7 @@ fn string_to_tip(s: &str) -> [u16; 128] {
     for (i, &c) in encoded.iter().enumerate() {
         ret[i] = c;
     }
+    ret[encoded.len()] = 0; // Null-terminate the string
     ret
 }
 
@@ -335,17 +344,15 @@ fn main() -> Result<(), Box<dyn Error>> {
             hWnd: window,
             hIcon: icon,
             guidItem: guid,
+            // Both NIF_TIP & NIF_SHOWTIP are required to actually show the tooltip.
             uFlags: NIF_ICON | NIF_MESSAGE | NIF_GUID | NIF_TIP | NIF_SHOWTIP,
             uCallbackMessage: UNCAPPY_TASKBAR_CB_ID,
+            szTip: string_to_tip(TOOLTIP_ENABLED),
             Anonymous: NOTIFYICONDATAW_0 {
                 uVersion: NOTIFYICON_VERSION_4,
             },
             ..Default::default()
         };
-        for (i, c) in "Uncappy".encode_utf16().enumerate() {
-            notify_icon_data.szTip[i] = c;
-        }
-        notify_icon_data.szTip["Uncappy".len()] = 0; // Null-terminate the string.
         Shell_NotifyIconW(NIM_ADD, notify_icon_data).ok()?;
         defer!({
             // Remove the icon when done.
