@@ -19,12 +19,12 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon,
     DispatchMessageW, GetCursorPos, GetMenuItemInfoW, GetMessageW, InsertMenuItemW, LoadIconW,
     RegisterClassExW, SetForegroundWindow, SetMenuInfo, SetMenuItemInfoW, SetWindowsHookExA,
-    TrackPopupMenuEx, UnhookWindowsHookEx, UnregisterClassW, HMENU, IDI_QUESTION, KBDLLHOOKSTRUCT,
-    MENUINFO, MENUITEMINFOW, MENU_ITEM_STATE, MFS_CHECKED, MFS_DISABLED, MFS_ENABLED,
-    MFT_SEPARATOR, MFT_STRING, MIIM_CHECKMARKS, MIIM_FTYPE, MIIM_ID, MIIM_STATE, MIIM_STRING,
-    MIM_STYLE, MNS_NOTIFYBYPOS, MSG, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTBUTTON,
-    WH_KEYBOARD_LL, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_KEYUP, WM_LBUTTONUP, WM_MENUCOMMAND,
-    WM_RBUTTONUP, WM_SYSKEYUP, WNDCLASSEXW,
+    TrackPopupMenuEx, UnhookWindowsHookEx, UnregisterClassW, HMENU, KBDLLHOOKSTRUCT, MENUINFO,
+    MENUITEMINFOW, MENU_ITEM_STATE, MFS_CHECKED, MFS_DISABLED, MFS_ENABLED, MFT_SEPARATOR,
+    MFT_STRING, MIIM_CHECKMARKS, MIIM_FTYPE, MIIM_ID, MIIM_STATE, MIIM_STRING, MIM_STYLE,
+    MNS_NOTIFYBYPOS, MSG, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTBUTTON, WH_KEYBOARD_LL,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_KEYUP, WM_MENUCOMMAND, WM_RBUTTONUP, WM_SYSKEYUP,
+    WNDCLASSEXW,
 };
 use windows_core::{GUID, PCWSTR, PWSTR};
 
@@ -126,6 +126,7 @@ impl Uncappy {
         Ok(())
     }
 
+    // With reference to https://github.com/susam/uncap
     unsafe fn ll_keyboard_hook(&self, ncode: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         if ncode < 0 {
             return CallNextHookEx(None, ncode, wparam, lparam);
@@ -176,7 +177,6 @@ impl Uncappy {
             }
             _ => {
                 // Delegate to the next hook in the chain.
-                debug!("Other key pressed: {:#x}", key_code.0 as i32);
                 CallNextHookEx(None, ncode, wparam, lparam)
             }
         }
@@ -242,7 +242,16 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         debug!("Setting up taskbar icon");
         // hinstance as None implies loading from the system.
-        let icon = LoadIconW(None, IDI_QUESTION)?;
+        // let icon = LoadIconW(None, IDI_QUESTION)?;
+        let icon = LoadIconW(
+            Some(module.into()),
+            PCWSTR(
+                "uncappy_icon\0"
+                    .encode_utf16()
+                    .collect::<Vec<u16>>()
+                    .as_ptr(),
+            ),
+        )?;
         debug!("Icon loaded: {:?}", icon);
         defer!({
             // Unload the icon when done.
@@ -406,7 +415,6 @@ unsafe extern "system" fn window_callback(
     }
 }
 
-// With reference to https://github.com/susam/uncap
 unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     return UNCAPPY.with_borrow(|uncappy| uncappy.ll_keyboard_hook(ncode, wparam, lparam));
 }
