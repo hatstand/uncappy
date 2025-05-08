@@ -1,7 +1,8 @@
 use defer::defer;
 use log::{debug, error, info};
-use std::cell::LazyCell;
+use std::cell::RefCell;
 use std::error::Error;
+use std::thread_local;
 use windows::Win32::Foundation::{GetLastError, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -14,17 +15,15 @@ use windows::Win32::UI::Shell::{
     NOTIFYICON_VERSION_4,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CalculatePopupWindowPosition, CallNextHookEx, CheckMenuItem, CreatePopupMenu, CreateWindowExW,
-    DefWindowProcW, DestroyIcon, DispatchMessageW, DrawMenuBar, GetCursorPos, GetMenuItemInfoW,
-    GetMessageW, GetWindowLongPtrW, HiliteMenuItem, InsertMenuItemW, LoadIconW, ModifyMenuW,
-    MrmResourceIndexerMessageSeverity, RegisterClassExW, SetForegroundWindow, SetMenuItemInfoW,
+    CallNextHookEx, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon,
+    DispatchMessageW, GetCursorPos, GetMenuItemInfoW, GetMessageW, GetWindowLongPtrW,
+    InsertMenuItemW, LoadIconW, RegisterClassExW, SetForegroundWindow, SetMenuItemInfoW,
     SetWindowLongPtrW, SetWindowsHookExA, TrackPopupMenuEx, UnhookWindowsHookEx, UnregisterClassW,
     GWLP_USERDATA, HMENU, IDI_QUESTION, KBDLLHOOKSTRUCT, MENUITEMINFOW, MENU_ITEM_STATE,
-    MFS_CHECKED, MFS_DISABLED, MFS_ENABLED, MFS_HILITE, MFS_UNHILITE, MFT_SEPARATOR, MFT_STRING,
-    MF_BYPOSITION, MF_HILITE, MF_UNHILITE, MIIM_CHECKMARKS, MIIM_FTYPE, MIIM_STATE, MIIM_STRING,
-    MSG, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTALIGN, TPM_RIGHTBUTTON, WH_KEYBOARD_LL,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_COMMAND, WM_KEYUP, WM_LBUTTONUP, WM_MENUSELECT,
-    WM_NCACTIVATE, WM_RBUTTONUP, WM_SYSKEYUP, WNDCLASSEXW,
+    MFS_CHECKED, MFS_DISABLED, MFS_ENABLED, MFT_SEPARATOR, MFT_STRING, MIIM_CHECKMARKS, MIIM_FTYPE,
+    MIIM_STATE, MIIM_STRING, MSG, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTBUTTON, WH_KEYBOARD_LL,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_COMMAND, WM_KEYUP, WM_LBUTTONUP, WM_RBUTTONUP,
+    WM_SYSKEYUP, WNDCLASSEXW,
 };
 use windows_core::{GUID, PCWSTR, PWSTR};
 
@@ -49,6 +48,10 @@ pub fn GET_Y_LPARAM(l: usize) -> i32 {
 struct Uncappy {
     window: HWND,
     popup_menu: HMENU,
+}
+
+thread_local! {
+    static UNCAPPY: RefCell<Option<Uncappy>> = RefCell::new(None);
 }
 
 fn toggle_checked(current_state: MENU_ITEM_STATE) -> MENU_ITEM_STATE {
@@ -93,6 +96,58 @@ impl Uncappy {
             SetMenuItemInfoW(self.popup_menu, id, true, &mut mii)?;
         }
         Ok(())
+    }
+
+    unsafe fn ll_keyboard_hook(&self, ncode: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+        if ncode < 0 {
+            return CallNextHookEx(None, ncode, wparam, lparam);
+        }
+        let p: &KBDLLHOOKSTRUCT = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
+        let key_code = VIRTUAL_KEY(p.vkCode as u16);
+        match key_code {
+            VK_CAPITAL => {
+                if p.dwExtraInfo == UNCAPPY_INFO {
+                    // Skip our own events.
+                    return LRESULT(1);
+                }
+                // Synthesize a key event to remap the Caps Lock key to Escape.
+                let dw_flags: KEYBD_EVENT_FLAGS =
+                    if wparam.0 as u32 == WM_KEYUP || wparam.0 as u32 == WM_SYSKEYUP {
+                        KEYEVENTF_KEYUP
+                    } else {
+                        KEYBD_EVENT_FLAGS(0)
+                    };
+                let remapped = KEYBDINPUT {
+                    wVk: VK_ESCAPE,
+                    wScan: 0,
+                    dwFlags: dw_flags,
+                    time: 0,
+                    dwExtraInfo: UNCAPPY_INFO,
+                };
+                let inputs = [INPUT {
+                    r#type: INPUT_KEYBOARD,
+                    Anonymous: INPUT_0 { ki: remapped },
+                }];
+                match SendInput(&inputs, size_of::<INPUT>() as i32) {
+                    // Should return 1 (the number of events sent) on success.
+                    1 => {
+                        debug!("Key remapped successfully");
+                    }
+                    0 => {
+                        error!("Failed to remap key: {:?}", GetLastError());
+                    }
+                    n => {
+                        error!("Failed to remap key: {:?}", n);
+                    }
+                }
+                LRESULT(1)
+            }
+            _ => {
+                // Delegate to the next hook in the chain.
+                debug!("Other key pressed: {:#x}", key_code.0 as i32);
+                CallNextHookEx(None, ncode, wparam, lparam)
+            }
+        }
     }
 }
 
@@ -147,6 +202,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         };
         SetWindowLongPtrW(window, GWLP_USERDATA, &uncappy as *const _ as isize);
 
+        UNCAPPY.set(Some(uncappy));
         // Register a low-level keyboard hook that receives all keyboard events on the system.
         let hook_id = SetWindowsHookExA(WH_KEYBOARD_LL, Some(hook_callback), None, 0)?;
         defer!({
@@ -313,53 +369,15 @@ unsafe extern "system" fn window_callback(
 
 // With reference to https://github.com/susam/uncap
 unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    if ncode < 0 {
-        return CallNextHookEx(None, ncode, wparam, lparam);
-    }
-    let p: &KBDLLHOOKSTRUCT = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
-    let key_code = VIRTUAL_KEY(p.vkCode as u16);
-    match key_code {
-        VK_CAPITAL => {
-            if p.dwExtraInfo == UNCAPPY_INFO {
-                // Skip our own events.
-                return LRESULT(1);
-            }
-            // Synthesize a key event to remap the Caps Lock key to Escape.
-            let dw_flags: KEYBD_EVENT_FLAGS =
-                if wparam.0 as u32 == WM_KEYUP || wparam.0 as u32 == WM_SYSKEYUP {
-                    KEYEVENTF_KEYUP
-                } else {
-                    KEYBD_EVENT_FLAGS(0)
-                };
-            let remapped = KEYBDINPUT {
-                wVk: VK_ESCAPE,
-                wScan: 0,
-                dwFlags: dw_flags,
-                time: 0,
-                dwExtraInfo: UNCAPPY_INFO,
-            };
-            let inputs = [INPUT {
-                r#type: INPUT_KEYBOARD,
-                Anonymous: INPUT_0 { ki: remapped },
-            }];
-            match SendInput(&inputs, size_of::<INPUT>() as i32) {
-                // Should return 1 (the number of events sent) on success.
-                1 => {
-                    debug!("Key remapped successfully");
-                }
-                0 => {
-                    error!("Failed to remap key: {:?}", GetLastError());
-                }
-                n => {
-                    error!("Failed to remap key: {:?}", n);
-                }
-            }
-            LRESULT(1)
-        }
-        _ => {
-            // Delegate to the next hook in the chain.
-            debug!("Other key pressed: {:#x}", key_code.0 as i32);
+    return UNCAPPY.with_borrow(|uncappy| {
+        if let Some(uncappy) = uncappy.as_ref() {
+            debug!(
+                "Hook callback: ncode={:?}, wparam={:#x}, lparam={:#x}",
+                ncode, wparam.0, lparam.0
+            );
+            uncappy.ll_keyboard_hook(ncode, wparam, lparam)
+        } else {
             CallNextHookEx(None, ncode, wparam, lparam)
         }
-    }
+    });
 }
