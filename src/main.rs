@@ -95,14 +95,6 @@ fn toggle_checked(current_state: MENU_ITEM_STATE) -> MENU_ITEM_STATE {
     }
 }
 
-fn mapping_from_state(state: MENU_ITEM_STATE) -> MAPPING {
-    if state & MFS_CHECKED == MFS_CHECKED {
-        MAPPING::MapCapsToEscape
-    } else {
-        MAPPING::DisableMapping
-    }
-}
-
 fn icon_for_mapping(mapping: &MAPPING) -> String {
     match mapping {
         MAPPING::MapCapsToEscape => "exit_icon".to_string(),
@@ -142,11 +134,6 @@ impl Uncappy {
     fn menu_selection(&mut self, id: u32) -> Result<(), Box<dyn Error>> {
         debug!("Menu item selected: {}", id);
         unsafe {
-            let mut mii = MENUITEMINFOW {
-                cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
-                fMask: MIIM_STATE,
-                ..Default::default()
-            };
             match id {
                 POPUP_EXIT_ID => {
                     debug!("Exit selected");
@@ -159,12 +146,7 @@ impl Uncappy {
                 }
                 POPUP_ENABLE_ID => {
                     debug!("Enable/Disable selected");
-                    GetMenuItemInfoW(self.popup_menu, id, false, &mut mii)?;
-                    debug!("Menu check state: {:?}", mii.fState & MFS_CHECKED);
-                    mii.fMask = MIIM_STATE;
-                    mii.fState = toggle_checked(mii.fState);
-                    SetMenuItemInfoW(self.popup_menu, id, false, &mut mii)?;
-                    self.toggle(Some(mapping_from_state(mii.fState)))?;
+                    self.toggle()?;
                 }
                 _ => {
                     debug!("Unknown menu item selected: {}", id);
@@ -189,21 +171,25 @@ impl Uncappy {
         Ok(icon)
     }
 
-    unsafe fn toggle(&mut self, target_mapping: Option<MAPPING>) -> Result<(), Box<dyn Error>> {
-        debug!("Toggling mapping: {:?}", target_mapping);
-        match target_mapping {
-            Some(mapping) => {
-                debug!("Mapping set to: {:?}", mapping);
-                self.mapping = mapping;
-            }
-            None => {
-                self.mapping = match self.mapping {
-                    MAPPING::MapCapsToEscape => MAPPING::DisableMapping,
-                    MAPPING::DisableMapping => MAPPING::MapCapsToEscape,
-                };
-                debug!("Mapping toggled to: {:?}", self.mapping);
-            }
-        }
+    unsafe fn toggle(&mut self) -> Result<(), Box<dyn Error>> {
+        self.mapping = match self.mapping {
+            MAPPING::MapCapsToEscape => MAPPING::DisableMapping,
+            MAPPING::DisableMapping => MAPPING::MapCapsToEscape,
+        };
+        debug!("Mapping toggling to: {:?}", self.mapping);
+
+        debug!("Updating menu item state");
+        let mut mii = MENUITEMINFOW {
+            cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
+            fMask: MIIM_STATE,
+            ..Default::default()
+        };
+        GetMenuItemInfoW(self.popup_menu, POPUP_ENABLE_ID, false, &mut mii)?;
+        debug!("Menu check state: {:?}", mii.fState & MFS_CHECKED);
+        mii.fMask = MIIM_STATE;
+        mii.fState = toggle_checked(mii.fState);
+        SetMenuItemInfoW(self.popup_menu, POPUP_ENABLE_ID, false, &mut mii)?;
+
         let icon_name = icon_for_mapping(&self.mapping);
         debug!("Swapping icon to: {}", icon_name);
         let icon = self.load_icon(&icon_name)?;
@@ -225,8 +211,6 @@ impl Uncappy {
             },
         )
         .ok()?;
-        // Icon is copied to the taskbar, so we can destroy it.
-        DestroyIcon(icon)?;
         Ok(())
     }
 
@@ -540,7 +524,7 @@ unsafe extern "system" fn window_callback(
                 }
                 NIN_SELECT => {
                     debug!("NIN_SELECT");
-                    UNCAPPY.with_borrow_mut(|uncappy| match uncappy.toggle(None) {
+                    UNCAPPY.with_borrow_mut(|uncappy| match uncappy.toggle() {
                         Ok(_) => {
                             debug!("Mapping toggled");
                         }
