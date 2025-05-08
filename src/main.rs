@@ -14,9 +14,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VIRTUAL_KEY, VK_CAPITAL, VK_ESCAPE,
 };
 use windows::Win32::UI::Shell::{
-    Shell_NotifyIconGetRect, Shell_NotifyIconW, NIF_GUID, NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP,
-    NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NIM_SETVERSION, NIN_SELECT, NOTIFYICONDATAW,
-    NOTIFYICONDATAW_0, NOTIFYICONIDENTIFIER, NOTIFYICON_VERSION_4,
+    ShellExecuteW, Shell_NotifyIconGetRect, Shell_NotifyIconW, NIF_GUID, NIF_ICON, NIF_MESSAGE,
+    NIF_SHOWTIP, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NIM_SETVERSION, NIN_SELECT,
+    NOTIFYICONDATAW, NOTIFYICONDATAW_0, NOTIFYICONIDENTIFIER, NOTIFYICON_VERSION_4,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon,
@@ -25,9 +25,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SetMenuItemInfoW, SetWindowsHookExA, TrackPopupMenuEx, UnhookWindowsHookEx, UnregisterClassW,
     HICON, HMENU, KBDLLHOOKSTRUCT, MENUINFO, MENUITEMINFOW, MENU_ITEM_STATE, MFS_CHECKED,
     MFS_DISABLED, MFS_ENABLED, MFT_SEPARATOR, MFT_STRING, MIIM_CHECKMARKS, MIIM_FTYPE, MIIM_ID,
-    MIIM_STATE, MIIM_STRING, MIM_STYLE, MSG, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTBUTTON,
-    WH_KEYBOARD_LL, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_DESTROY,
-    WM_KEYUP, WM_QUIT, WM_RBUTTONUP, WM_SYSKEYUP, WNDCLASSEXW,
+    MIIM_STATE, MIIM_STRING, MIM_STYLE, MSG, SW_SHOWNORMAL, TPM_BOTTOMALIGN, TPM_LEFTALIGN,
+    TPM_RIGHTBUTTON, WH_KEYBOARD_LL, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND,
+    WM_DESTROY, WM_KEYUP, WM_QUIT, WM_RBUTTONUP, WM_SYSKEYUP, WNDCLASSEXW,
 };
 use windows_core::{BOOL, GUID, PCWSTR, PWSTR};
 
@@ -55,6 +55,7 @@ pub fn GET_Y_LPARAM(l: usize) -> i32 {
 
 const POPUP_ENABLE_ID: u32 = 0x42;
 const POPUP_EXIT_ID: u32 = 0x43;
+const POPUP_ABOUT_ID: u32 = 0x44;
 
 #[derive(PartialEq, Eq, Debug)]
 enum MAPPING {
@@ -147,6 +148,22 @@ impl Uncappy {
                 POPUP_ENABLE_ID => {
                     debug!("Enable/Disable selected");
                     self.toggle()?;
+                }
+                POPUP_ABOUT_ID => {
+                    debug!("About selected");
+                    ShellExecuteW(
+                        None,
+                        PCWSTR(null_mut()),
+                        PCWSTR(
+                            "https://github.com/hatstand/uncappy\0"
+                                .encode_utf16()
+                                .collect::<Vec<u16>>()
+                                .as_ptr(),
+                        ),
+                        PCWSTR(null_mut()),
+                        PCWSTR(null_mut()),
+                        SW_SHOWNORMAL,
+                    );
                 }
                 _ => {
                     debug!("Unknown menu item selected: {}", id);
@@ -425,6 +442,7 @@ unsafe fn create_popup_menu() -> Result<HMENU, Box<dyn Error>> {
         },
     )?;
     debug!("Popup menu created: {:?}", menu);
+    // Add a menu item to exit the application.
     InsertMenuItemW(
         menu,
         0,
@@ -464,6 +482,21 @@ unsafe fn create_popup_menu() -> Result<HMENU, Box<dyn Error>> {
             cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
             fMask: MIIM_FTYPE,
             fType: MFT_SEPARATOR,
+            ..Default::default()
+        },
+    )?;
+    // Add a menu item for the about dialog.
+    InsertMenuItemW(
+        menu,
+        0,
+        true,
+        &mut MENUITEMINFOW {
+            cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
+            fMask: MIIM_FTYPE | MIIM_ID | MIIM_STRING,
+            fType: MFT_STRING,
+            dwTypeData: PWSTR("About\0".encode_utf16().collect::<Vec<u16>>().as_mut_ptr()),
+            cch: "About".len() as u32,
+            wID: POPUP_ABOUT_ID,
             ..Default::default()
         },
     )?;
