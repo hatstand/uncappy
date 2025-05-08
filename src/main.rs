@@ -1,7 +1,8 @@
 use defer::defer;
 use log::{debug, error, info};
+use std::cell::LazyCell;
 use std::error::Error;
-use windows::Win32::Foundation::{GetLastError, HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{GetLastError, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
@@ -13,13 +14,13 @@ use windows::Win32::UI::Shell::{
     NOTIFYICON_VERSION_4,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon,
-    DispatchMessageW, GetMessageW, InsertMenuItemW, LoadIconW, RegisterClassExW,
-    SetForegroundWindow, SetWindowsHookExA, TrackPopupMenuEx, UnhookWindowsHookEx,
-    UnregisterClassW, IDI_QUESTION, KBDLLHOOKSTRUCT, MENUITEMINFOW, MFS_ENABLED, MFT_STRING,
-    MIIM_FTYPE, MIIM_STATE, MIIM_STRING, MSG, TPM_BOTTOMALIGN, TPM_RIGHTALIGN, WH_KEYBOARD_LL,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_KEYUP, WM_LBUTTONUP, WM_RBUTTONUP, WM_SYSKEYUP,
-    WNDCLASSEXW,
+    CalculatePopupWindowPosition, CallNextHookEx, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
+    DestroyIcon, DispatchMessageW, GetCursorPos, GetMessageW, InsertMenuItemW, LoadIconW,
+    RegisterClassExW, SetForegroundWindow, SetWindowsHookExA, TrackPopupMenuEx,
+    UnhookWindowsHookEx, UnregisterClassW, HMENU, IDI_QUESTION, KBDLLHOOKSTRUCT, MENUITEMINFOW,
+    MFS_ENABLED, MFT_STRING, MIIM_FTYPE, MIIM_STATE, MIIM_STRING, MSG, TPM_BOTTOMALIGN,
+    TPM_LEFTALIGN, TPM_RIGHTALIGN, WH_KEYBOARD_LL, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_KEYUP,
+    WM_LBUTTONUP, WM_RBUTTONUP, WM_SYSKEYUP, WNDCLASSEXW,
 };
 use windows_core::{GUID, PCWSTR, PWSTR};
 
@@ -64,7 +65,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         // https://learn.microsoft.com/en-us/windows/win32/winmsg/window-features#message-only-windows
         let window = CreateWindowExW(
             WINDOW_EX_STYLE(0),
-            class_name,
+            PCWSTR(class as *const u16),
             PCWSTR(
                 "Uncappy Window\0"
                     .encode_utf16()
@@ -172,8 +173,18 @@ fn show_popup_menu(hwnd: HWND, x: i32, y: i32) -> Result<(), Box<dyn Error>> {
             },
         )?;
         // Required to ensure the popup menu disappears again when a user clicks elsewhere.
+        let mut point = POINT::default();
+        GetCursorPos(&mut point)?;
         SetForegroundWindow(hwnd).ok()?;
-        TrackPopupMenuEx(menu, TPM_RIGHTALIGN.0 | TPM_BOTTOMALIGN.0, x, y, hwnd, None).ok()?;
+        TrackPopupMenuEx(
+            menu,
+            TPM_LEFTALIGN.0 | TPM_BOTTOMALIGN.0,
+            point.x,
+            point.y,
+            hwnd,
+            None,
+        )
+        .ok()?;
     }
     Ok(())
 }
