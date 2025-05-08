@@ -18,6 +18,8 @@ jobs:
     - uses: actions-rust-lang/setup-rust-toolchain@v1
     - name: Install Windows toolchain
       run: rustup target add x86_64-pc-windows-gnu
+    - name: Install clippy
+      run: rustup component add clippy
     - name: Install Mingw-w64 toolchain
       run: sudo apt install binutils-mingw-w64-x86-64 gcc-mingw-w64
     - uses: actions/checkout@v4
@@ -30,6 +32,8 @@ jobs:
         echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
     - name: Build
       run: cargo build --verbose --target x86_64-pc-windows-gnu -r
+    - name: Run clippy
+      run: cargo clippy
     - name: Version release
       env:
         VERSION: ${{ steps.calendar-version.outputs.version }}

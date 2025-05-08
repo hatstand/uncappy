@@ -58,7 +58,7 @@ const POPUP_EXIT_ID: u32 = 0x43;
 const POPUP_ABOUT_ID: u32 = 0x44;
 
 #[derive(PartialEq, Eq, Debug)]
-enum MAPPING {
+enum Mapping {
     MapCapsToEscape,
     DisableMapping,
 }
@@ -67,7 +67,7 @@ struct Uncappy {
     instance: HINSTANCE,
     window: HWND,
     popup_menu: HMENU,
-    mapping: MAPPING,
+    mapping: Mapping,
     guid: GUID,
     icon_cache: HashMap<String, HICON>,
 }
@@ -82,7 +82,7 @@ thread_local! {
         instance: HINSTANCE(null_mut()),
         window: HWND(null_mut()),
         popup_menu: HMENU(null_mut()),
-        mapping: MAPPING::DisableMapping,
+        mapping: Mapping::DisableMapping,
         guid: GUID::new().unwrap(),
         icon_cache: HashMap::new(),
     });
@@ -96,10 +96,10 @@ fn toggle_checked(current_state: MENU_ITEM_STATE) -> MENU_ITEM_STATE {
     }
 }
 
-fn icon_for_mapping(mapping: &MAPPING) -> String {
+fn icon_for_mapping(mapping: &Mapping) -> String {
     match mapping {
-        MAPPING::MapCapsToEscape => "exit_icon".to_string(),
-        MAPPING::DisableMapping => "noexit_icon".to_string(),
+        Mapping::MapCapsToEscape => "exit_icon".to_string(),
+        Mapping::DisableMapping => "noexit_icon".to_string(),
     }
 }
 
@@ -190,8 +190,8 @@ impl Uncappy {
 
     unsafe fn toggle(&mut self) -> Result<(), Box<dyn Error>> {
         self.mapping = match self.mapping {
-            MAPPING::MapCapsToEscape => MAPPING::DisableMapping,
-            MAPPING::DisableMapping => MAPPING::MapCapsToEscape,
+            Mapping::MapCapsToEscape => Mapping::DisableMapping,
+            Mapping::DisableMapping => Mapping::MapCapsToEscape,
         };
         debug!("Mapping toggling to: {:?}", self.mapping);
 
@@ -205,7 +205,7 @@ impl Uncappy {
         debug!("Menu check state: {:?}", mii.fState & MFS_CHECKED);
         mii.fMask = MIIM_STATE;
         mii.fState = toggle_checked(mii.fState);
-        SetMenuItemInfoW(self.popup_menu, POPUP_ENABLE_ID, false, &mut mii)?;
+        SetMenuItemInfoW(self.popup_menu, POPUP_ENABLE_ID, false, &mii)?;
 
         let icon_name = icon_for_mapping(&self.mapping);
         debug!("Swapping icon to: {}", icon_name);
@@ -213,12 +213,12 @@ impl Uncappy {
         debug!("Icon loaded: {:?}", icon);
         Shell_NotifyIconW(
             NIM_MODIFY,
-            &mut NOTIFYICONDATAW {
+            &NOTIFYICONDATAW {
                 cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
                 hWnd: self.window,
                 uFlags: NIF_ICON | NIF_GUID | NIF_TIP | NIF_SHOWTIP,
                 guidItem: self.guid,
-                szTip: string_to_tip(if self.mapping == MAPPING::MapCapsToEscape {
+                szTip: string_to_tip(if self.mapping == Mapping::MapCapsToEscape {
                     TOOLTIP_ENABLED
                 } else {
                     TOOLTIP_DISABLED
@@ -236,7 +236,7 @@ impl Uncappy {
         if ncode < 0 {
             return CallNextHookEx(None, ncode, wparam, lparam);
         }
-        if self.mapping == MAPPING::DisableMapping {
+        if self.mapping == Mapping::DisableMapping {
             // No remapping needed.
             return CallNextHookEx(None, ncode, wparam, lparam);
         }
@@ -349,7 +349,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             instance: module.into(),
             window,
             popup_menu: create_popup_menu()?,
-            mapping: MAPPING::MapCapsToEscape,
+            mapping: Mapping::MapCapsToEscape,
             guid,
             icon_cache: HashMap::new(),
         });
@@ -388,7 +388,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             debug!("Removing taskbar icon");
             let _ = Shell_NotifyIconW(
                 NIM_DELETE,
-                &mut NOTIFYICONDATAW {
+                &NOTIFYICONDATAW {
                     cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
                     uFlags: NIF_GUID,
                     hWnd: window,
@@ -401,7 +401,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         DestroyIcon(icon)?;
         // Enable better callback API.
         Shell_NotifyIconW(NIM_SETVERSION, notify_icon_data).ok()?;
-        let rect = Shell_NotifyIconGetRect(&mut NOTIFYICONIDENTIFIER {
+        let rect = Shell_NotifyIconGetRect(&NOTIFYICONIDENTIFIER {
             cbSize: std::mem::size_of::<NOTIFYICONIDENTIFIER>() as u32,
             guidItem: guid,
             ..Default::default()
@@ -447,7 +447,7 @@ unsafe fn create_popup_menu() -> Result<HMENU, Box<dyn Error>> {
         menu,
         0,
         true,
-        &mut MENUITEMINFOW {
+        &MENUITEMINFOW {
             cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
             fMask: MIIM_FTYPE | MIIM_ID | MIIM_STRING,
             fType: MFT_STRING,
@@ -462,7 +462,7 @@ unsafe fn create_popup_menu() -> Result<HMENU, Box<dyn Error>> {
         menu,
         0,
         true,
-        &mut MENUITEMINFOW {
+        &MENUITEMINFOW {
             cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
             fMask: MIIM_FTYPE | MIIM_STATE | MIIM_STRING | MIIM_CHECKMARKS | MIIM_ID,
             fType: MFT_STRING,
@@ -478,7 +478,7 @@ unsafe fn create_popup_menu() -> Result<HMENU, Box<dyn Error>> {
         menu,
         0,
         true,
-        &mut MENUITEMINFOW {
+        &MENUITEMINFOW {
             cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
             fMask: MIIM_FTYPE,
             fType: MFT_SEPARATOR,
@@ -490,7 +490,7 @@ unsafe fn create_popup_menu() -> Result<HMENU, Box<dyn Error>> {
         menu,
         0,
         true,
-        &mut MENUITEMINFOW {
+        &MENUITEMINFOW {
             cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
             fMask: MIIM_FTYPE | MIIM_ID | MIIM_STRING,
             fType: MFT_STRING,
@@ -505,7 +505,7 @@ unsafe fn create_popup_menu() -> Result<HMENU, Box<dyn Error>> {
         menu,
         0,
         true,
-        &mut MENUITEMINFOW {
+        &MENUITEMINFOW {
             cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
             fMask: MIIM_FTYPE | MIIM_STATE | MIIM_STRING,
             fType: MFT_STRING,
@@ -587,5 +587,5 @@ unsafe extern "system" fn window_callback(
 }
 
 unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    return UNCAPPY.with_borrow(|uncappy| uncappy.ll_keyboard_hook(ncode, wparam, lparam));
+    UNCAPPY.with_borrow(|uncappy| uncappy.ll_keyboard_hook(ncode, wparam, lparam))
 }
