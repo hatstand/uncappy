@@ -1,3 +1,5 @@
+#![windows_subsystem = "windows"]
+
 use defer::defer;
 use log::{debug, error, info};
 use std::cell::RefCell;
