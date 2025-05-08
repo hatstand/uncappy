@@ -20,9 +20,16 @@ jobs:
     - name: Install Mingw-w64 toolchain
       run: sudo apt install binutils-mingw-w64-x86-64 gcc-mingw-w64
     - uses: actions/checkout@v4
+    - name: Calendar Version
+      id: calendar-version
+      uses: harm-matthias-harms/calendar-version@v0
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
     - name: Build
       run: cargo build --verbose --target x86_64-pc-windows-gnu -r
+    - name: Version release
+      run: cp target/x86_64-pc-windows-gnu/release/uncappy.exe uncappy-${{ steps.calendar-version.outputs.new-version }}.exe
     - uses: actions/upload-artifact@v4
       with:
         name: uncappy
-        path: target/x86_64-pc-windows-gnu/release/uncappy.exe
+        path: uncappy-*.exe
