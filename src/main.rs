@@ -13,9 +13,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VIRTUAL_KEY, VK_CAPITAL, VK_ESCAPE,
 };
 use windows::Win32::UI::Shell::{
-    Shell_NotifyIconGetRect, Shell_NotifyIconW, NIF_GUID, NIF_ICON, NIF_MESSAGE, NIM_ADD,
-    NIM_DELETE, NIM_MODIFY, NIM_SETVERSION, NIN_SELECT, NOTIFYICONDATAW, NOTIFYICONDATAW_0,
-    NOTIFYICONIDENTIFIER, NOTIFYICON_VERSION_4,
+    Shell_NotifyIconGetRect, Shell_NotifyIconW, NIF_GUID, NIF_ICON, NIF_INFO, NIF_MESSAGE,
+    NIF_SHOWTIP, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NIM_SETVERSION, NIN_SELECT,
+    NOTIFYICONDATAW, NOTIFYICONDATAW_0, NOTIFYICONIDENTIFIER, NOTIFYICON_VERSION_4,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon,
@@ -253,6 +253,16 @@ impl Uncappy {
     }
 }
 
+fn string_to_tip(s: &str) -> [u16; 128] {
+    let mut ret = [0u16; 128];
+    let encoded: Vec<u16> = s.encode_utf16().collect();
+    assert!(encoded.len() < ret.len());
+    for (i, &c) in encoded.iter().enumerate() {
+        ret[i] = c;
+    }
+    ret
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     env_logger::init();
     unsafe {
@@ -325,13 +335,17 @@ fn main() -> Result<(), Box<dyn Error>> {
             hWnd: window,
             hIcon: icon,
             guidItem: guid,
-            uFlags: NIF_ICON | NIF_MESSAGE | NIF_GUID,
+            uFlags: NIF_ICON | NIF_MESSAGE | NIF_GUID | NIF_TIP | NIF_SHOWTIP,
             uCallbackMessage: UNCAPPY_TASKBAR_CB_ID,
             Anonymous: NOTIFYICONDATAW_0 {
                 uVersion: NOTIFYICON_VERSION_4,
             },
             ..Default::default()
         };
+        for (i, c) in "Uncappy".encode_utf16().enumerate() {
+            notify_icon_data.szTip[i] = c;
+        }
+        notify_icon_data.szTip["Uncappy".len()] = 0; // Null-terminate the string.
         Shell_NotifyIconW(NIM_ADD, notify_icon_data).ok()?;
         defer!({
             // Remove the icon when done.
@@ -471,7 +485,7 @@ unsafe extern "system" fn window_callback(
     );
     match msg {
         UNCAPPY_TASKBAR_CB_ID => {
-            debug!("Taskbar icon message received");
+            debug!("Taskbar icon message received: {:#x}", LOWORD(lparam.0));
             match LOWORD(lparam.0) as u32 {
                 WM_RBUTTONUP => {
                     debug!("Right click received");
@@ -486,7 +500,8 @@ unsafe extern "system" fn window_callback(
                                 error!("Failed to show popup menu: {:?}", err);
                             }
                         }
-                    })
+                    });
+                    LRESULT(0)
                 }
                 NIN_SELECT => {
                     debug!("NIN_SELECT");
@@ -498,10 +513,10 @@ unsafe extern "system" fn window_callback(
                             error!("Failed to toggle mapping: {:?}", err);
                         }
                     });
+                    LRESULT(0)
                 }
-                _ => {}
+                _ => DefWindowProcW(hwnd, msg, wparam, lparam),
             }
-            LRESULT(0)
         }
         WM_COMMAND => {
             debug!("Menu Command received");
