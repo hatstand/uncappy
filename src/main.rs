@@ -165,11 +165,11 @@ impl Uncappy {
                 self.mapping = mapping;
             }
             None => {
-                debug!("Mapping toggled");
                 self.mapping = match self.mapping {
                     MAPPING::MapCapsToEscape => MAPPING::DisableMapping,
                     MAPPING::DisableMapping => MAPPING::MapCapsToEscape,
                 };
+                debug!("Mapping toggled to: {:?}", self.mapping);
             }
         }
         let icon_name = icon_for_mapping(&self.mapping);
