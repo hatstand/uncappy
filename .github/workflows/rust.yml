@@ -47,5 +47,5 @@ jobs:
         tag_name: ${{ steps.calendar-version.outputs.version }}
         files: "uncappy-*.exe"
         fail_on_unmatched_files: true
-        draft: true
+        draft: false
         prerelease: false
