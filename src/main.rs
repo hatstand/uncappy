@@ -20,11 +20,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
     MrmResourceIndexerMessageSeverity, RegisterClassExW, SetForegroundWindow, SetMenuItemInfoW,
     SetWindowLongPtrW, SetWindowsHookExA, TrackPopupMenuEx, UnhookWindowsHookEx, UnregisterClassW,
     GWLP_USERDATA, HMENU, IDI_QUESTION, KBDLLHOOKSTRUCT, MENUITEMINFOW, MENU_ITEM_STATE,
-    MFS_CHECKED, MFS_ENABLED, MFS_HILITE, MFS_UNHILITE, MFT_STRING, MF_BYPOSITION, MF_HILITE,
-    MF_UNHILITE, MIIM_CHECKMARKS, MIIM_FTYPE, MIIM_STATE, MIIM_STRING, MSG, TPM_BOTTOMALIGN,
-    TPM_LEFTALIGN, TPM_RIGHTALIGN, TPM_RIGHTBUTTON, WH_KEYBOARD_LL, WINDOW_EX_STYLE, WINDOW_STYLE,
-    WM_APP, WM_COMMAND, WM_KEYUP, WM_LBUTTONUP, WM_MENUSELECT, WM_NCACTIVATE, WM_RBUTTONUP,
-    WM_SYSKEYUP, WNDCLASSEXW,
+    MFS_CHECKED, MFS_DISABLED, MFS_ENABLED, MFS_HILITE, MFS_UNHILITE, MFT_SEPARATOR, MFT_STRING,
+    MF_BYPOSITION, MF_HILITE, MF_UNHILITE, MIIM_CHECKMARKS, MIIM_FTYPE, MIIM_STATE, MIIM_STRING,
+    MSG, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTALIGN, TPM_RIGHTBUTTON, WH_KEYBOARD_LL,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_COMMAND, WM_KEYUP, WM_LBUTTONUP, WM_MENUSELECT,
+    WM_NCACTIVATE, WM_RBUTTONUP, WM_SYSKEYUP, WNDCLASSEXW,
 };
 use windows_core::{GUID, PCWSTR, PWSTR};
 
@@ -214,16 +214,51 @@ fn main() -> Result<(), Box<dyn Error>> {
 unsafe fn create_popup_menu() -> Result<HMENU, Box<dyn Error>> {
     let menu = CreatePopupMenu()?;
     debug!("Popup menu created: {:?}", menu);
-    let mut item = MENUITEMINFOW {
-        cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
-        fMask: MIIM_FTYPE | MIIM_STATE | MIIM_STRING | MIIM_CHECKMARKS,
-        fType: MFT_STRING,
-        dwTypeData: PWSTR("Enable\0".encode_utf16().collect::<Vec<u16>>().as_mut_ptr()),
-        cch: "Enable".len() as u32,
-        fState: MFS_ENABLED | MFS_CHECKED,
-        ..Default::default()
-    };
-    InsertMenuItemW(menu, 0, true, &mut item)?;
+    // Add a menu item to toggle the Caps Lock key mapping.
+    InsertMenuItemW(
+        menu,
+        0,
+        true,
+        &mut MENUITEMINFOW {
+            cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
+            fMask: MIIM_FTYPE | MIIM_STATE | MIIM_STRING | MIIM_CHECKMARKS,
+            fType: MFT_STRING,
+            dwTypeData: PWSTR("Enable\0".encode_utf16().collect::<Vec<u16>>().as_mut_ptr()),
+            cch: "Enable".len() as u32,
+            fState: MFS_ENABLED | MFS_CHECKED,
+            ..Default::default()
+        },
+    )?;
+    InsertMenuItemW(
+        menu,
+        0,
+        true,
+        &mut MENUITEMINFOW {
+            cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
+            fMask: MIIM_FTYPE,
+            fType: MFT_SEPARATOR,
+            ..Default::default()
+        },
+    )?;
+    InsertMenuItemW(
+        menu,
+        0,
+        true,
+        &mut MENUITEMINFOW {
+            cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
+            fMask: MIIM_FTYPE | MIIM_STATE | MIIM_STRING,
+            fType: MFT_STRING,
+            dwTypeData: PWSTR(
+                "Uncappy\0"
+                    .encode_utf16()
+                    .collect::<Vec<u16>>()
+                    .as_mut_ptr(),
+            ),
+            cch: "Uncappy".len() as u32,
+            fState: MFS_DISABLED,
+            ..Default::default()
+        },
+    )?;
     Ok(menu)
 }
 
