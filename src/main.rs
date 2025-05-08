@@ -2,8 +2,9 @@ use defer::defer;
 use log::{debug, error, info};
 use std::cell::RefCell;
 use std::error::Error;
+use std::ptr::null_mut;
 use std::thread_local;
-use windows::Win32::Foundation::{GetLastError, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
+use windows::Win32::Foundation::{GetLastError, HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
@@ -16,42 +17,59 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon,
-    DispatchMessageW, GetCursorPos, GetMenuItemInfoW, GetMessageW, GetWindowLongPtrW,
-    InsertMenuItemW, LoadIconW, RegisterClassExW, SetForegroundWindow, SetMenuItemInfoW,
-    SetWindowLongPtrW, SetWindowsHookExA, TrackPopupMenuEx, UnhookWindowsHookEx, UnregisterClassW,
-    GWLP_USERDATA, HMENU, IDI_QUESTION, KBDLLHOOKSTRUCT, MENUITEMINFOW, MENU_ITEM_STATE,
-    MFS_CHECKED, MFS_DISABLED, MFS_ENABLED, MFT_SEPARATOR, MFT_STRING, MIIM_CHECKMARKS, MIIM_FTYPE,
-    MIIM_STATE, MIIM_STRING, MSG, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTBUTTON, WH_KEYBOARD_LL,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_COMMAND, WM_KEYUP, WM_LBUTTONUP, WM_RBUTTONUP,
-    WM_SYSKEYUP, WNDCLASSEXW,
+    DispatchMessageW, GetCursorPos, GetMenuItemInfoW, GetMessageW, InsertMenuItemW, LoadIconW,
+    RegisterClassExW, SetForegroundWindow, SetMenuInfo, SetMenuItemInfoW, SetWindowsHookExA,
+    TrackPopupMenuEx, UnhookWindowsHookEx, UnregisterClassW, HMENU, IDI_QUESTION, KBDLLHOOKSTRUCT,
+    MENUINFO, MENUITEMINFOW, MENU_ITEM_STATE, MFS_CHECKED, MFS_DISABLED, MFS_ENABLED,
+    MFT_SEPARATOR, MFT_STRING, MIIM_CHECKMARKS, MIIM_FTYPE, MIIM_ID, MIIM_STATE, MIIM_STRING,
+    MIM_STYLE, MNS_NOTIFYBYPOS, MSG, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTBUTTON,
+    WH_KEYBOARD_LL, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_KEYUP, WM_LBUTTONUP, WM_MENUCOMMAND,
+    WM_RBUTTONUP, WM_SYSKEYUP, WNDCLASSEXW,
 };
 use windows_core::{GUID, PCWSTR, PWSTR};
 
 const UNCAPPY_TASKBAR_CB_ID: u32 = WM_APP + 1;
 
+#[allow(non_snake_case)]
 pub fn LOWORD(l: isize) -> isize {
     l & 0xffff
 }
 
+#[allow(non_snake_case)]
 pub fn HIWORD(l: isize) -> isize {
     (l >> 16) & 0xffff
 }
 
+#[allow(non_snake_case)]
 pub fn GET_X_LPARAM(l: usize) -> i32 {
     (l & 0xffff) as i32
 }
 
+#[allow(non_snake_case)]
 pub fn GET_Y_LPARAM(l: usize) -> i32 {
     ((l >> 16) & 0xffff) as i32
+}
+
+#[derive(PartialEq, Eq, Debug)]
+enum MAPPING {
+    MapCapsToEscape,
+    DisableMapping,
 }
 
 struct Uncappy {
     window: HWND,
     popup_menu: HMENU,
+    mapping: MAPPING,
 }
 
 thread_local! {
-    static UNCAPPY: RefCell<Option<Uncappy>> = RefCell::new(None);
+    // The low-level keyboard hook has no way to receive user data.
+    // Fortunately, it should be called from the same thread as it was created in so we can rely on thread-local storage.
+    static UNCAPPY: RefCell<Uncappy> = RefCell::new(Uncappy {
+        window: HWND(null_mut()),
+        popup_menu: HMENU(null_mut()),
+        mapping: MAPPING::DisableMapping,
+    });
 }
 
 fn toggle_checked(current_state: MENU_ITEM_STATE) -> MENU_ITEM_STATE {
@@ -59,6 +77,14 @@ fn toggle_checked(current_state: MENU_ITEM_STATE) -> MENU_ITEM_STATE {
         current_state & !MFS_CHECKED
     } else {
         current_state | MFS_CHECKED
+    }
+}
+
+fn mapping_from_state(state: MENU_ITEM_STATE) -> MAPPING {
+    if state & MFS_CHECKED == MFS_CHECKED {
+        MAPPING::MapCapsToEscape
+    } else {
+        MAPPING::DisableMapping
     }
 }
 
@@ -81,7 +107,7 @@ impl Uncappy {
         Ok(())
     }
 
-    fn menu_selection(&self, id: u32) -> Result<(), Box<dyn Error>> {
+    fn menu_selection(&mut self, id: u32) -> Result<(), Box<dyn Error>> {
         debug!("Menu item selected: {}", id);
         unsafe {
             let mut mii = MENUITEMINFOW {
@@ -94,12 +120,18 @@ impl Uncappy {
             mii.fMask = MIIM_STATE;
             mii.fState = toggle_checked(mii.fState);
             SetMenuItemInfoW(self.popup_menu, id, true, &mut mii)?;
+            self.mapping = mapping_from_state(mii.fState);
+            debug!("Mapping updated: {:?}", self.mapping);
         }
         Ok(())
     }
 
     unsafe fn ll_keyboard_hook(&self, ncode: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         if ncode < 0 {
+            return CallNextHookEx(None, ncode, wparam, lparam);
+        }
+        if self.mapping == MAPPING::DisableMapping {
+            // No remapping needed.
             return CallNextHookEx(None, ncode, wparam, lparam);
         }
         let p: &KBDLLHOOKSTRUCT = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
@@ -196,13 +228,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         })?;
         debug!("Window created: {:?}", window);
 
-        let uncappy = Uncappy {
+        UNCAPPY.set(Uncappy {
             window,
             popup_menu: create_popup_menu()?,
-        };
-        SetWindowLongPtrW(window, GWLP_USERDATA, &uncappy as *const _ as isize);
+            mapping: MAPPING::MapCapsToEscape,
+        });
 
-        UNCAPPY.set(Some(uncappy));
         // Register a low-level keyboard hook that receives all keyboard events on the system.
         let hook_id = SetWindowsHookExA(WH_KEYBOARD_LL, Some(hook_callback), None, 0)?;
         defer!({
@@ -269,6 +300,15 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 unsafe fn create_popup_menu() -> Result<HMENU, Box<dyn Error>> {
     let menu = CreatePopupMenu()?;
+    SetMenuInfo(
+        menu,
+        &MENUINFO {
+            cbSize: std::mem::size_of::<MENUINFO>() as u32,
+            fMask: MIM_STYLE,
+            dwStyle: MNS_NOTIFYBYPOS,
+            ..Default::default()
+        },
+    )?;
     debug!("Popup menu created: {:?}", menu);
     // Add a menu item to toggle the Caps Lock key mapping.
     InsertMenuItemW(
@@ -302,7 +342,7 @@ unsafe fn create_popup_menu() -> Result<HMENU, Box<dyn Error>> {
         true,
         &mut MENUITEMINFOW {
             cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
-            fMask: MIIM_FTYPE | MIIM_STATE | MIIM_STRING,
+            fMask: MIIM_FTYPE | MIIM_STATE | MIIM_STRING | MIIM_ID,
             fType: MFT_STRING,
             dwTypeData: PWSTR(
                 "Uncappy\0"
@@ -312,6 +352,7 @@ unsafe fn create_popup_menu() -> Result<HMENU, Box<dyn Error>> {
             ),
             cch: "Uncappy".len() as u32,
             fState: MFS_DISABLED,
+            wID: 0x42,
             ..Default::default()
         },
     )?;
@@ -330,37 +371,35 @@ unsafe extern "system" fn window_callback(
         "Window callback: hwnd={:?}, msg={:#x}, wparam={:#x}, lparam={:#x}",
         hwnd, msg, wparam.0, lparam.0
     );
-    // GWLP_USERDATA contains a pointer to an Uncappy instance but may not be set yet during window creation messages.
     match msg {
         UNCAPPY_TASKBAR_CB_ID => {
             debug!("Taskbar icon message received");
-            let uncappy = &*(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const Uncappy);
             match LOWORD(lparam.0) as u32 {
-                WM_LBUTTONUP => {
-                    debug!("Mouse click received");
-                }
                 WM_RBUTTONUP => {
                     debug!("Right click received");
                     let mut cursor_pos = POINT::default();
                     GetCursorPos(&mut cursor_pos).unwrap();
-                    match uncappy.show_popup_menu(cursor_pos.x, cursor_pos.y) {
-                        Ok(_) => {
-                            debug!("Popup menu shown");
+                    UNCAPPY.with_borrow(|uncappy| {
+                        match uncappy.show_popup_menu(cursor_pos.x, cursor_pos.y) {
+                            Ok(_) => {
+                                debug!("Popup menu shown");
+                            }
+                            Err(err) => {
+                                error!("Failed to show popup menu: {:?}", err);
+                            }
                         }
-                        Err(err) => {
-                            error!("Failed to show popup menu: {:?}", err);
-                        }
-                    }
+                    })
                 }
                 _ => {}
             }
             LRESULT(0)
         }
-        WM_COMMAND => {
-            debug!("Command received");
-            let uncappy = &*(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const Uncappy);
+        WM_MENUCOMMAND => {
+            debug!("Menu Command received");
             let chosen = LOWORD(wparam.0 as isize) as u32;
-            let _ = uncappy.menu_selection(chosen);
+            UNCAPPY.with_borrow_mut(|uncappy| {
+                let _ = uncappy.menu_selection(chosen);
+            });
             LRESULT(0)
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
@@ -369,15 +408,5 @@ unsafe extern "system" fn window_callback(
 
 // With reference to https://github.com/susam/uncap
 unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    return UNCAPPY.with_borrow(|uncappy| {
-        if let Some(uncappy) = uncappy.as_ref() {
-            debug!(
-                "Hook callback: ncode={:?}, wparam={:#x}, lparam={:#x}",
-                ncode, wparam.0, lparam.0
-            );
-            uncappy.ll_keyboard_hook(ncode, wparam, lparam)
-        } else {
-            CallNextHookEx(None, ncode, wparam, lparam)
-        }
-    });
+    return UNCAPPY.with_borrow(|uncappy| uncappy.ll_keyboard_hook(ncode, wparam, lparam));
 }
