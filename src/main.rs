@@ -14,8 +14,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::Shell::{
     Shell_NotifyIconGetRect, Shell_NotifyIconW, NIF_GUID, NIF_ICON, NIF_MESSAGE, NIM_ADD,
-    NIM_DELETE, NIM_SETVERSION, NOTIFYICONDATAW, NOTIFYICONDATAW_0, NOTIFYICONIDENTIFIER,
-    NOTIFYICON_VERSION_4,
+    NIM_DELETE, NIM_MODIFY, NIM_SETVERSION, NIN_SELECT, NOTIFYICONDATAW, NOTIFYICONDATAW_0,
+    NOTIFYICONIDENTIFIER, NOTIFYICON_VERSION_4,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon,
@@ -65,6 +65,7 @@ struct Uncappy {
     window: HWND,
     popup_menu: HMENU,
     mapping: MAPPING,
+    guid: GUID,
 }
 
 thread_local! {
@@ -74,6 +75,7 @@ thread_local! {
         window: HWND(null_mut()),
         popup_menu: HMENU(null_mut()),
         mapping: MAPPING::DisableMapping,
+        guid: GUID::new().unwrap(),
     });
 }
 
@@ -90,6 +92,13 @@ fn mapping_from_state(state: MENU_ITEM_STATE) -> MAPPING {
         MAPPING::MapCapsToEscape
     } else {
         MAPPING::DisableMapping
+    }
+}
+
+fn icon_for_mapping(mapping: &MAPPING) -> String {
+    match mapping {
+        MAPPING::MapCapsToEscape => "exit_icon".to_string(),
+        MAPPING::DisableMapping => "noexit_icon".to_string(),
     }
 }
 
@@ -137,8 +146,7 @@ impl Uncappy {
                     mii.fMask = MIIM_STATE;
                     mii.fState = toggle_checked(mii.fState);
                     SetMenuItemInfoW(self.popup_menu, id, false, &mut mii)?;
-                    self.mapping = mapping_from_state(mii.fState);
-                    debug!("Mapping updated: {:?}", self.mapping);
+                    self.toggle(Some(mapping_from_state(mii.fState)))?;
                 }
                 _ => {
                     debug!("Unknown menu item selected: {}", id);
@@ -146,6 +154,45 @@ impl Uncappy {
                 }
             }
         }
+        Ok(())
+    }
+
+    unsafe fn toggle(&mut self, target_mapping: Option<MAPPING>) -> Result<(), Box<dyn Error>> {
+        debug!("Toggling mapping: {:?}", target_mapping);
+        match target_mapping {
+            Some(mapping) => {
+                debug!("Mapping set to: {:?}", mapping);
+                self.mapping = mapping;
+            }
+            None => {
+                debug!("Mapping toggled");
+                self.mapping = match self.mapping {
+                    MAPPING::MapCapsToEscape => MAPPING::DisableMapping,
+                    MAPPING::DisableMapping => MAPPING::MapCapsToEscape,
+                };
+            }
+        }
+        let icon_name = icon_for_mapping(&self.mapping);
+        debug!("Swapping icon to: {}", icon_name);
+        let icon = LoadIconW(
+            Some(GetModuleHandleW(None)?.into()),
+            PCWSTR(icon_name.encode_utf16().collect::<Vec<u16>>().as_ptr()),
+        )?;
+        debug!("Icon loaded: {:?}", icon);
+        Shell_NotifyIconW(
+            NIM_MODIFY,
+            &mut NOTIFYICONDATAW {
+                cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+                hWnd: self.window,
+                uFlags: NIF_ICON | NIF_GUID,
+                guidItem: self.guid,
+                hIcon: icon,
+                ..Default::default()
+            },
+        )
+        .ok()?;
+        // Icon is copied to the taskbar, so we can destroy it.
+        DestroyIcon(icon)?;
         Ok(())
     }
 
@@ -251,10 +298,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         })?;
         debug!("Window created: {:?}", window);
 
+        let guid = GUID::new()?;
         UNCAPPY.set(Uncappy {
             window,
             popup_menu: create_popup_menu()?,
             mapping: MAPPING::MapCapsToEscape,
+            guid,
         });
 
         // Register a low-level keyboard hook that receives all keyboard events on the system.
@@ -265,23 +314,11 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         debug!("Setting up taskbar icon");
         // hinstance as None implies loading from the system.
-        // let icon = LoadIconW(None, IDI_QUESTION)?;
         let icon = LoadIconW(
             Some(module.into()),
-            PCWSTR(
-                "uncappy_icon\0"
-                    .encode_utf16()
-                    .collect::<Vec<u16>>()
-                    .as_ptr(),
-            ),
+            PCWSTR("exit_icon\0".encode_utf16().collect::<Vec<u16>>().as_ptr()),
         )?;
         debug!("Icon loaded: {:?}", icon);
-        defer!({
-            // Unload the icon when done.
-            debug!("Destroying icon: {:?}", icon);
-            let _ = DestroyIcon(icon);
-        });
-        let guid = GUID::new()?;
         debug!("adding to taskbar");
         let notify_icon_data = &mut NOTIFYICONDATAW {
             cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
@@ -303,12 +340,15 @@ fn main() -> Result<(), Box<dyn Error>> {
                 NIM_DELETE,
                 &mut NOTIFYICONDATAW {
                     cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+                    uFlags: NIF_GUID,
                     hWnd: window,
                     guidItem: guid,
                     ..Default::default()
                 },
             );
         });
+        // Icon is copied to the taskbar, so we can destroy it.
+        DestroyIcon(icon)?;
         // Enable better callback API.
         Shell_NotifyIconW(NIM_SETVERSION, notify_icon_data).ok()?;
         let rect = Shell_NotifyIconGetRect(&mut NOTIFYICONIDENTIFIER {
@@ -447,6 +487,17 @@ unsafe extern "system" fn window_callback(
                             }
                         }
                     })
+                }
+                NIN_SELECT => {
+                    debug!("NIN_SELECT");
+                    UNCAPPY.with_borrow_mut(|uncappy| match uncappy.toggle(None) {
+                        Ok(_) => {
+                            debug!("Mapping toggled");
+                        }
+                        Err(err) => {
+                            error!("Failed to toggle mapping: {:?}", err);
+                        }
+                    });
                 }
                 _ => {}
             }
