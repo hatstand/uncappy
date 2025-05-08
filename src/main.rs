@@ -1,4 +1,4 @@
-#![windows_subsystem = "windows"]
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use defer::defer;
 use log::{debug, error, info};
@@ -20,15 +20,15 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon,
     DispatchMessageW, GetCursorPos, GetMenuItemInfoW, GetMessageW, InsertMenuItemW, LoadIconW,
-    RegisterClassExW, SetForegroundWindow, SetMenuInfo, SetMenuItemInfoW, SetWindowsHookExA,
-    TrackPopupMenuEx, UnhookWindowsHookEx, UnregisterClassW, HMENU, KBDLLHOOKSTRUCT, MENUINFO,
-    MENUITEMINFOW, MENU_ITEM_STATE, MFS_CHECKED, MFS_DISABLED, MFS_ENABLED, MFT_SEPARATOR,
-    MFT_STRING, MIIM_CHECKMARKS, MIIM_FTYPE, MIIM_ID, MIIM_STATE, MIIM_STRING, MIM_STYLE,
-    MNS_NOTIFYBYPOS, MSG, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTBUTTON, WH_KEYBOARD_LL,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_KEYUP, WM_MENUCOMMAND, WM_RBUTTONUP, WM_SYSKEYUP,
-    WNDCLASSEXW,
+    PostMessageW, PostQuitMessage, RegisterClassExW, SetForegroundWindow, SetMenuInfo,
+    SetMenuItemInfoW, SetWindowsHookExA, TrackPopupMenuEx, UnhookWindowsHookEx, UnregisterClassW,
+    HMENU, KBDLLHOOKSTRUCT, MENUINFO, MENUITEMINFOW, MENU_ITEM_STATE, MFS_CHECKED, MFS_DISABLED,
+    MFS_ENABLED, MFT_SEPARATOR, MFT_STRING, MIIM_CHECKMARKS, MIIM_FTYPE, MIIM_ID, MIIM_STATE,
+    MIIM_STRING, MIM_STYLE, MSG, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTBUTTON, WH_KEYBOARD_LL,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_DESTROY, WM_KEYUP, WM_QUIT,
+    WM_RBUTTONUP, WM_SYSKEYUP, WNDCLASSEXW,
 };
-use windows_core::{GUID, PCWSTR, PWSTR};
+use windows_core::{BOOL, GUID, PCWSTR, PWSTR};
 
 const UNCAPPY_TASKBAR_CB_ID: u32 = WM_APP + 1;
 
@@ -51,6 +51,9 @@ pub fn GET_X_LPARAM(l: usize) -> i32 {
 pub fn GET_Y_LPARAM(l: usize) -> i32 {
     ((l >> 16) & 0xffff) as i32
 }
+
+const POPUP_ENABLE_ID: u32 = 0x42;
+const POPUP_EXIT_ID: u32 = 0x43;
 
 #[derive(PartialEq, Eq, Debug)]
 enum MAPPING {
@@ -117,13 +120,31 @@ impl Uncappy {
                 fMask: MIIM_STATE,
                 ..Default::default()
             };
-            GetMenuItemInfoW(self.popup_menu, id, true, &mut mii)?;
-            debug!("Menu check state: {:?}", mii.fState & MFS_CHECKED);
-            mii.fMask = MIIM_STATE;
-            mii.fState = toggle_checked(mii.fState);
-            SetMenuItemInfoW(self.popup_menu, id, true, &mut mii)?;
-            self.mapping = mapping_from_state(mii.fState);
-            debug!("Mapping updated: {:?}", self.mapping);
+            match id {
+                POPUP_EXIT_ID => {
+                    debug!("Exit selected");
+                    PostMessageW(
+                        Some(self.window),
+                        WM_CLOSE,
+                        WPARAM::default(),
+                        LPARAM::default(),
+                    )?;
+                }
+                POPUP_ENABLE_ID => {
+                    debug!("Enable/Disable selected");
+                    GetMenuItemInfoW(self.popup_menu, id, false, &mut mii)?;
+                    debug!("Menu check state: {:?}", mii.fState & MFS_CHECKED);
+                    mii.fMask = MIIM_STATE;
+                    mii.fState = toggle_checked(mii.fState);
+                    SetMenuItemInfoW(self.popup_menu, id, false, &mut mii)?;
+                    self.mapping = mapping_from_state(mii.fState);
+                    debug!("Mapping updated: {:?}", self.mapping);
+                }
+                _ => {
+                    debug!("Unknown menu item selected: {}", id);
+                    return Ok(());
+                }
+            }
         }
         Ok(())
     }
@@ -301,11 +322,21 @@ fn main() -> Result<(), Box<dyn Error>> {
         loop {
             let mut msg = MSG::default();
             debug!("Waiting for message...");
-            GetMessageW(&mut msg, None, 0, 0).ok()?;
-            debug!("Message received: {:#x} {:?}", msg.message, msg);
-            debug!("dispatching message: {:?}", msg);
-            DispatchMessageW(&msg);
+            match GetMessageW(&mut msg, None, 0, 0) {
+                BOOL(0) => {
+                    assert_eq!(msg.message, WM_QUIT);
+                    info!("Quitting...");
+                    break;
+                }
+                BOOL(-1) => {
+                    error!("Failed to get message: {:?}", GetLastError());
+                }
+                BOOL(_) => {
+                    DispatchMessageW(&msg);
+                }
+            }
         }
+        Ok(())
     }
 }
 
@@ -316,11 +347,25 @@ unsafe fn create_popup_menu() -> Result<HMENU, Box<dyn Error>> {
         &MENUINFO {
             cbSize: std::mem::size_of::<MENUINFO>() as u32,
             fMask: MIM_STYLE,
-            dwStyle: MNS_NOTIFYBYPOS,
+            // dwStyle: MNS_NOTIFYBYPOS,
             ..Default::default()
         },
     )?;
     debug!("Popup menu created: {:?}", menu);
+    InsertMenuItemW(
+        menu,
+        0,
+        true,
+        &mut MENUITEMINFOW {
+            cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
+            fMask: MIIM_FTYPE | MIIM_ID | MIIM_STRING,
+            fType: MFT_STRING,
+            dwTypeData: PWSTR("Exit\0".encode_utf16().collect::<Vec<u16>>().as_mut_ptr()),
+            cch: "Exit".len() as u32,
+            wID: POPUP_EXIT_ID,
+            ..Default::default()
+        },
+    )?;
     // Add a menu item to toggle the Caps Lock key mapping.
     InsertMenuItemW(
         menu,
@@ -328,14 +373,16 @@ unsafe fn create_popup_menu() -> Result<HMENU, Box<dyn Error>> {
         true,
         &mut MENUITEMINFOW {
             cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
-            fMask: MIIM_FTYPE | MIIM_STATE | MIIM_STRING | MIIM_CHECKMARKS,
+            fMask: MIIM_FTYPE | MIIM_STATE | MIIM_STRING | MIIM_CHECKMARKS | MIIM_ID,
             fType: MFT_STRING,
             dwTypeData: PWSTR("Enable\0".encode_utf16().collect::<Vec<u16>>().as_mut_ptr()),
             cch: "Enable".len() as u32,
             fState: MFS_ENABLED | MFS_CHECKED,
+            wID: POPUP_ENABLE_ID,
             ..Default::default()
         },
     )?;
+    // Add a separator.
     InsertMenuItemW(
         menu,
         0,
@@ -347,13 +394,14 @@ unsafe fn create_popup_menu() -> Result<HMENU, Box<dyn Error>> {
             ..Default::default()
         },
     )?;
+    // Add a nice name to the top of the menu.
     InsertMenuItemW(
         menu,
         0,
         true,
         &mut MENUITEMINFOW {
             cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
-            fMask: MIIM_FTYPE | MIIM_STATE | MIIM_STRING | MIIM_ID,
+            fMask: MIIM_FTYPE | MIIM_STATE | MIIM_STRING,
             fType: MFT_STRING,
             dwTypeData: PWSTR(
                 "Uncappy\0"
@@ -363,7 +411,6 @@ unsafe fn create_popup_menu() -> Result<HMENU, Box<dyn Error>> {
             ),
             cch: "Uncappy".len() as u32,
             fState: MFS_DISABLED,
-            wID: 0x42,
             ..Default::default()
         },
     )?;
@@ -405,12 +452,16 @@ unsafe extern "system" fn window_callback(
             }
             LRESULT(0)
         }
-        WM_MENUCOMMAND => {
+        WM_COMMAND => {
             debug!("Menu Command received");
             let chosen = LOWORD(wparam.0 as isize) as u32;
             UNCAPPY.with_borrow_mut(|uncappy| {
                 let _ = uncappy.menu_selection(chosen);
             });
+            LRESULT(0)
+        }
+        WM_DESTROY => {
+            PostQuitMessage(0);
             LRESULT(0)
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
