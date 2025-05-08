@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 defer = "0.2.1"
 env_logger = "0.11.8"
+lazy_static = "1.5.0"
 log = "0.4.27"
 windows-core = "0.61.0"
 

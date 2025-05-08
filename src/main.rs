@@ -14,13 +14,17 @@ use windows::Win32::UI::Shell::{
     NOTIFYICON_VERSION_4,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CalculatePopupWindowPosition, CallNextHookEx, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
-    DestroyIcon, DispatchMessageW, GetCursorPos, GetMessageW, InsertMenuItemW, LoadIconW,
-    RegisterClassExW, SetForegroundWindow, SetWindowsHookExA, TrackPopupMenuEx,
-    UnhookWindowsHookEx, UnregisterClassW, HMENU, IDI_QUESTION, KBDLLHOOKSTRUCT, MENUITEMINFOW,
-    MFS_CHECKED, MFS_ENABLED, MFT_STRING, MIIM_CHECKMARKS, MIIM_FTYPE, MIIM_STATE, MIIM_STRING,
-    MSG, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTALIGN, WH_KEYBOARD_LL, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WM_APP, WM_KEYUP, WM_LBUTTONUP, WM_RBUTTONUP, WM_SYSKEYUP, WNDCLASSEXW,
+    CalculatePopupWindowPosition, CallNextHookEx, CheckMenuItem, CreatePopupMenu, CreateWindowExW,
+    DefWindowProcW, DestroyIcon, DispatchMessageW, DrawMenuBar, GetCursorPos, GetMenuItemInfoW,
+    GetMessageW, GetWindowLongPtrW, HiliteMenuItem, InsertMenuItemW, LoadIconW, ModifyMenuW,
+    MrmResourceIndexerMessageSeverity, RegisterClassExW, SetForegroundWindow, SetMenuItemInfoW,
+    SetWindowLongPtrW, SetWindowsHookExA, TrackPopupMenuEx, UnhookWindowsHookEx, UnregisterClassW,
+    GWLP_USERDATA, HMENU, IDI_QUESTION, KBDLLHOOKSTRUCT, MENUITEMINFOW, MENU_ITEM_STATE,
+    MFS_CHECKED, MFS_ENABLED, MFS_HILITE, MFS_UNHILITE, MFT_STRING, MF_BYPOSITION, MF_HILITE,
+    MF_UNHILITE, MIIM_CHECKMARKS, MIIM_FTYPE, MIIM_STATE, MIIM_STRING, MSG, TPM_BOTTOMALIGN,
+    TPM_LEFTALIGN, TPM_RIGHTALIGN, TPM_RIGHTBUTTON, WH_KEYBOARD_LL, WINDOW_EX_STYLE, WINDOW_STYLE,
+    WM_APP, WM_COMMAND, WM_KEYUP, WM_LBUTTONUP, WM_MENUSELECT, WM_NCACTIVATE, WM_RBUTTONUP,
+    WM_SYSKEYUP, WNDCLASSEXW,
 };
 use windows_core::{GUID, PCWSTR, PWSTR};
 
@@ -40,6 +44,56 @@ pub fn GET_X_LPARAM(l: usize) -> i32 {
 
 pub fn GET_Y_LPARAM(l: usize) -> i32 {
     ((l >> 16) & 0xffff) as i32
+}
+
+struct Uncappy {
+    window: HWND,
+    popup_menu: HMENU,
+}
+
+fn toggle_checked(current_state: MENU_ITEM_STATE) -> MENU_ITEM_STATE {
+    if current_state & MFS_CHECKED == MFS_CHECKED {
+        current_state & !MFS_CHECKED
+    } else {
+        current_state | MFS_CHECKED
+    }
+}
+
+impl Uncappy {
+    fn show_popup_menu(&self, x: i32, y: i32) -> Result<(), Box<dyn Error>> {
+        debug!("Showing popup menu at ({}, {})", x, y);
+        unsafe {
+            // Required to ensure the popup menu disappears again when a user clicks elsewhere.
+            SetForegroundWindow(self.window).ok()?;
+            TrackPopupMenuEx(
+                self.popup_menu,
+                TPM_LEFTALIGN.0 | TPM_BOTTOMALIGN.0 | TPM_RIGHTBUTTON.0,
+                x,
+                y,
+                self.window,
+                None,
+            )
+            .ok()?;
+        }
+        Ok(())
+    }
+
+    fn menu_selection(&self, id: u32) -> Result<(), Box<dyn Error>> {
+        debug!("Menu item selected: {}", id);
+        unsafe {
+            let mut mii = MENUITEMINFOW {
+                cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
+                fMask: MIIM_STATE,
+                ..Default::default()
+            };
+            GetMenuItemInfoW(self.popup_menu, id, true, &mut mii)?;
+            debug!("Menu check state: {:?}", mii.fState & MFS_CHECKED);
+            mii.fMask = MIIM_STATE;
+            mii.fState = toggle_checked(mii.fState);
+            SetMenuItemInfoW(self.popup_menu, id, true, &mut mii)?;
+        }
+        Ok(())
+    }
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -86,6 +140,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             error!("Failed to create window: {:?} {:?}", err, GetLastError());
         })?;
         debug!("Window created: {:?}", window);
+
+        let uncappy = Uncappy {
+            window,
+            popup_menu: create_popup_menu()?,
+        };
+        SetWindowLongPtrW(window, GWLP_USERDATA, &uncappy as *const _ as isize);
 
         // Register a low-level keyboard hook that receives all keyboard events on the system.
         let hook_id = SetWindowsHookExA(WH_KEYBOARD_LL, Some(hook_callback), None, 0)?;
@@ -144,40 +204,30 @@ fn main() -> Result<(), Box<dyn Error>> {
             let mut msg = MSG::default();
             debug!("Waiting for message...");
             GetMessageW(&mut msg, None, 0, 0).ok()?;
-            debug!("Message received: {:?}", msg);
+            debug!("Message received: {:#x} {:?}", msg.message, msg);
             debug!("dispatching message: {:?}", msg);
             DispatchMessageW(&msg);
         }
     }
 }
 
-const UNCAPPY_INFO: usize = (WM_APP + 0x4242) as usize;
-
-fn show_popup_menu(hwnd: HWND, x: i32, y: i32) -> Result<(), Box<dyn Error>> {
-    debug!("Showing popup menu at ({}, {})", x, y);
-    unsafe {
-        let menu = CreatePopupMenu()?;
-        debug!("Popup menu created: {:?}", menu);
-        InsertMenuItemW(
-            menu,
-            0,
-            true,
-            &mut MENUITEMINFOW {
-                cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
-                fMask: MIIM_FTYPE | MIIM_STATE | MIIM_STRING | MIIM_CHECKMARKS,
-                fType: MFT_STRING,
-                dwTypeData: PWSTR("Enable\0".encode_utf16().collect::<Vec<u16>>().as_mut_ptr()),
-                cch: "Enable".len() as u32,
-                fState: MFS_ENABLED | MFS_CHECKED,
-                ..Default::default()
-            },
-        )?;
-        // Required to ensure the popup menu disappears again when a user clicks elsewhere.
-        SetForegroundWindow(hwnd).ok()?;
-        TrackPopupMenuEx(menu, TPM_LEFTALIGN.0 | TPM_BOTTOMALIGN.0, x, y, hwnd, None).ok()?;
-    }
-    Ok(())
+unsafe fn create_popup_menu() -> Result<HMENU, Box<dyn Error>> {
+    let menu = CreatePopupMenu()?;
+    debug!("Popup menu created: {:?}", menu);
+    let mut item = MENUITEMINFOW {
+        cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
+        fMask: MIIM_FTYPE | MIIM_STATE | MIIM_STRING | MIIM_CHECKMARKS,
+        fType: MFT_STRING,
+        dwTypeData: PWSTR("Enable\0".encode_utf16().collect::<Vec<u16>>().as_mut_ptr()),
+        cch: "Enable".len() as u32,
+        fState: MFS_ENABLED | MFS_CHECKED,
+        ..Default::default()
+    };
+    InsertMenuItemW(menu, 0, true, &mut item)?;
+    Ok(menu)
 }
+
+const UNCAPPY_INFO: usize = (WM_APP + 0x4242) as usize;
 
 unsafe extern "system" fn window_callback(
     hwnd: windows::Win32::Foundation::HWND,
@@ -189,9 +239,11 @@ unsafe extern "system" fn window_callback(
         "Window callback: hwnd={:?}, msg={:#x}, wparam={:#x}, lparam={:#x}",
         hwnd, msg, wparam.0, lparam.0
     );
+    // GWLP_USERDATA contains a pointer to an Uncappy instance but may not be set yet during window creation messages.
     match msg {
         UNCAPPY_TASKBAR_CB_ID => {
             debug!("Taskbar icon message received");
+            let uncappy = &*(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const Uncappy);
             match LOWORD(lparam.0) as u32 {
                 WM_LBUTTONUP => {
                     debug!("Mouse click received");
@@ -200,7 +252,7 @@ unsafe extern "system" fn window_callback(
                     debug!("Right click received");
                     let mut cursor_pos = POINT::default();
                     GetCursorPos(&mut cursor_pos).unwrap();
-                    match show_popup_menu(hwnd, cursor_pos.x, cursor_pos.y) {
+                    match uncappy.show_popup_menu(cursor_pos.x, cursor_pos.y) {
                         Ok(_) => {
                             debug!("Popup menu shown");
                         }
@@ -211,6 +263,13 @@ unsafe extern "system" fn window_callback(
                 }
                 _ => {}
             }
+            LRESULT(0)
+        }
+        WM_COMMAND => {
+            debug!("Command received");
+            let uncappy = &*(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const Uncappy);
+            let chosen = LOWORD(wparam.0 as isize) as u32;
+            let _ = uncappy.menu_selection(chosen);
             LRESULT(0)
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
