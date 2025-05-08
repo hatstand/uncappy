@@ -22,14 +22,29 @@ jobs:
     - uses: actions/checkout@v4
     - name: Calendar Version
       id: calendar-version
-      uses: harm-matthias-harms/calendar-version@v0
-      with:
-        token: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        set -x
+        readonly VERSION="$(date +%Y%m%d)-${GITHUB_RUN_NUMBER}"
+        echo "Version: $VERSION"
+        echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
     - name: Build
       run: cargo build --verbose --target x86_64-pc-windows-gnu -r
     - name: Version release
-      run: cp target/x86_64-pc-windows-gnu/release/uncappy.exe uncappy-${{ steps.calendar-version.outputs.new-version }}.exe
+      env:
+        VERSION: ${{ steps.calendar-version.outputs.version }}
+      run: cp target/x86_64-pc-windows-gnu/release/uncappy.exe uncappy-${VERSION}.exe
     - uses: actions/upload-artifact@v4
       with:
         name: uncappy
         path: uncappy-*.exe
+    - name: Create draft pre-release
+      uses: softprops/action-gh-release@v2
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        name: ${{ steps.calendar-version.outputs.version }}
+        tag_name: ${{ steps.calendar-version.outputs.version }}
+        files: "uncappy-*.exe"
+        fail_on_unmatched_files: true
+        draft: true
+        prerelease: false
