@@ -353,10 +353,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             let _ = UnhookWindowsHookEx(hook_id);
         });
 
-        debug!("Setting up taskbar icon");
-        // hinstance as None implies loading from the system.
-        let icon = LoadIconW(Some(module.into()), to_pcwstr("exit_icon"))?;
-        debug!("Icon loaded: {:?}", icon);
+        debug!("Loading icon");
+        let icon = UNCAPPY.with_borrow_mut(|uncappy| uncappy.load_icon("exit_icon"))?;
         debug!("adding to taskbar");
         let notify_icon_data = &mut NOTIFYICONDATAW {
             cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
@@ -387,8 +385,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                 },
             );
         });
-        // Icon is copied to the taskbar, so we can destroy it.
-        DestroyIcon(icon)?;
         // Enable better callback API.
         Shell_NotifyIconW(NIM_SETVERSION, notify_icon_data).ok()?;
         let rect = Shell_NotifyIconGetRect(&NOTIFYICONIDENTIFIER {
