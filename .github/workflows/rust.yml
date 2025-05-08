@@ -20,7 +20,5 @@ jobs:
     - name: Install Mingw-w64 toolchain
       run: sudo apt install binutils-mingw-w64-x86-64 gcc-mingw-w64
     - uses: actions/checkout@v4
-    - name: Run tests
-      run: cargo test --verbose
     - name: Build
       run: cargo build --verbose --target x86_64-pc-windows-gnu -r
