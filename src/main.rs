@@ -18,9 +18,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DestroyIcon, DispatchMessageW, GetCursorPos, GetMessageW, InsertMenuItemW, LoadIconW,
     RegisterClassExW, SetForegroundWindow, SetWindowsHookExA, TrackPopupMenuEx,
     UnhookWindowsHookEx, UnregisterClassW, HMENU, IDI_QUESTION, KBDLLHOOKSTRUCT, MENUITEMINFOW,
-    MFS_ENABLED, MFT_STRING, MIIM_FTYPE, MIIM_STATE, MIIM_STRING, MSG, TPM_BOTTOMALIGN,
-    TPM_LEFTALIGN, TPM_RIGHTALIGN, WH_KEYBOARD_LL, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_KEYUP,
-    WM_LBUTTONUP, WM_RBUTTONUP, WM_SYSKEYUP, WNDCLASSEXW,
+    MFS_CHECKED, MFS_ENABLED, MFT_STRING, MIIM_CHECKMARKS, MIIM_FTYPE, MIIM_STATE, MIIM_STRING,
+    MSG, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTALIGN, WH_KEYBOARD_LL, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WM_APP, WM_KEYUP, WM_LBUTTONUP, WM_RBUTTONUP, WM_SYSKEYUP, WNDCLASSEXW,
 };
 use windows_core::{GUID, PCWSTR, PWSTR};
 
@@ -164,27 +164,17 @@ fn show_popup_menu(hwnd: HWND, x: i32, y: i32) -> Result<(), Box<dyn Error>> {
             true,
             &mut MENUITEMINFOW {
                 cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
-                fMask: MIIM_FTYPE | MIIM_STATE | MIIM_STRING,
+                fMask: MIIM_FTYPE | MIIM_STATE | MIIM_STRING | MIIM_CHECKMARKS,
                 fType: MFT_STRING,
                 dwTypeData: PWSTR("Enable\0".encode_utf16().collect::<Vec<u16>>().as_mut_ptr()),
                 cch: "Enable".len() as u32,
-                fState: MFS_ENABLED,
+                fState: MFS_ENABLED | MFS_CHECKED,
                 ..Default::default()
             },
         )?;
         // Required to ensure the popup menu disappears again when a user clicks elsewhere.
-        let mut point = POINT::default();
-        GetCursorPos(&mut point)?;
         SetForegroundWindow(hwnd).ok()?;
-        TrackPopupMenuEx(
-            menu,
-            TPM_LEFTALIGN.0 | TPM_BOTTOMALIGN.0,
-            point.x,
-            point.y,
-            hwnd,
-            None,
-        )
-        .ok()?;
+        TrackPopupMenuEx(menu, TPM_LEFTALIGN.0 | TPM_BOTTOMALIGN.0, x, y, hwnd, None).ok()?;
     }
     Ok(())
 }
@@ -208,9 +198,9 @@ unsafe extern "system" fn window_callback(
                 }
                 WM_RBUTTONUP => {
                     debug!("Right click received");
-                    let x = GET_X_LPARAM(wparam.0);
-                    let y = GET_Y_LPARAM(wparam.0);
-                    match show_popup_menu(hwnd, x, y) {
+                    let mut cursor_pos = POINT::default();
+                    GetCursorPos(&mut cursor_pos).unwrap();
+                    match show_popup_menu(hwnd, cursor_pos.x, cursor_pos.y) {
                         Ok(_) => {
                             debug!("Popup menu shown");
                         }
