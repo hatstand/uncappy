@@ -3,10 +3,11 @@
 use defer::defer;
 use log::{debug, error, info};
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::error::Error;
 use std::ptr::null_mut;
 use std::thread_local;
-use windows::Win32::Foundation::{GetLastError, HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows::Win32::Foundation::{GetLastError, HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
@@ -22,11 +23,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, GetCursorPos, GetMenuItemInfoW, GetMessageW, InsertMenuItemW, LoadIconW,
     PostMessageW, PostQuitMessage, RegisterClassExW, SetForegroundWindow, SetMenuInfo,
     SetMenuItemInfoW, SetWindowsHookExA, TrackPopupMenuEx, UnhookWindowsHookEx, UnregisterClassW,
-    HMENU, KBDLLHOOKSTRUCT, MENUINFO, MENUITEMINFOW, MENU_ITEM_STATE, MFS_CHECKED, MFS_DISABLED,
-    MFS_ENABLED, MFT_SEPARATOR, MFT_STRING, MIIM_CHECKMARKS, MIIM_FTYPE, MIIM_ID, MIIM_STATE,
-    MIIM_STRING, MIM_STYLE, MSG, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTBUTTON, WH_KEYBOARD_LL,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_DESTROY, WM_KEYUP, WM_QUIT,
-    WM_RBUTTONUP, WM_SYSKEYUP, WNDCLASSEXW,
+    HICON, HMENU, KBDLLHOOKSTRUCT, MENUINFO, MENUITEMINFOW, MENU_ITEM_STATE, MFS_CHECKED,
+    MFS_DISABLED, MFS_ENABLED, MFT_SEPARATOR, MFT_STRING, MIIM_CHECKMARKS, MIIM_FTYPE, MIIM_ID,
+    MIIM_STATE, MIIM_STRING, MIM_STYLE, MSG, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTBUTTON,
+    WH_KEYBOARD_LL, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_DESTROY,
+    WM_KEYUP, WM_QUIT, WM_RBUTTONUP, WM_SYSKEYUP, WNDCLASSEXW,
 };
 use windows_core::{BOOL, GUID, PCWSTR, PWSTR};
 
@@ -62,10 +63,12 @@ enum MAPPING {
 }
 
 struct Uncappy {
+    instance: HINSTANCE,
     window: HWND,
     popup_menu: HMENU,
     mapping: MAPPING,
     guid: GUID,
+    icon_cache: HashMap<String, HICON>,
 }
 
 const TOOLTIP_ENABLED: &str = "Mapping Caps Lock to Escape";
@@ -75,10 +78,12 @@ thread_local! {
     // The low-level keyboard hook has no way to receive user data.
     // Fortunately, it should be called from the same thread as it was created in so we can rely on thread-local storage.
     static UNCAPPY: RefCell<Uncappy> = RefCell::new(Uncappy {
+        instance: HINSTANCE(null_mut()),
         window: HWND(null_mut()),
         popup_menu: HMENU(null_mut()),
         mapping: MAPPING::DisableMapping,
         guid: GUID::new().unwrap(),
+        icon_cache: HashMap::new(),
     });
 }
 
@@ -102,6 +107,16 @@ fn icon_for_mapping(mapping: &MAPPING) -> String {
     match mapping {
         MAPPING::MapCapsToEscape => "exit_icon".to_string(),
         MAPPING::DisableMapping => "noexit_icon".to_string(),
+    }
+}
+
+impl Drop for Uncappy {
+    fn drop(&mut self) {
+        unsafe {
+            self.icon_cache.iter().for_each(|(_, icon)| {
+                let _ = DestroyIcon(*icon);
+            });
+        }
     }
 }
 
@@ -160,6 +175,20 @@ impl Uncappy {
         Ok(())
     }
 
+    unsafe fn load_icon(&mut self, icon_name: &str) -> Result<HICON, Box<dyn Error>> {
+        if let Some(icon) = self.icon_cache.get(icon_name) {
+            debug!("Icon found in cache: {:?}", icon);
+            return Ok(*icon);
+        }
+        debug!("Loading icon: {}", icon_name);
+        let icon = LoadIconW(
+            Some(self.instance),
+            PCWSTR(icon_name.encode_utf16().collect::<Vec<u16>>().as_ptr()),
+        )?;
+        self.icon_cache.insert(icon_name.to_string(), icon);
+        Ok(icon)
+    }
+
     unsafe fn toggle(&mut self, target_mapping: Option<MAPPING>) -> Result<(), Box<dyn Error>> {
         debug!("Toggling mapping: {:?}", target_mapping);
         match target_mapping {
@@ -177,10 +206,7 @@ impl Uncappy {
         }
         let icon_name = icon_for_mapping(&self.mapping);
         debug!("Swapping icon to: {}", icon_name);
-        let icon = LoadIconW(
-            Some(GetModuleHandleW(None)?.into()),
-            PCWSTR(icon_name.encode_utf16().collect::<Vec<u16>>().as_ptr()),
-        )?;
+        let icon = self.load_icon(&icon_name)?;
         debug!("Icon loaded: {:?}", icon);
         Shell_NotifyIconW(
             NIM_MODIFY,
@@ -319,10 +345,12 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         let guid = GUID::new()?;
         UNCAPPY.set(Uncappy {
+            instance: module.into(),
             window,
             popup_menu: create_popup_menu()?,
             mapping: MAPPING::MapCapsToEscape,
             guid,
+            icon_cache: HashMap::new(),
         });
 
         // Register a low-level keyboard hook that receives all keyboard events on the system.
