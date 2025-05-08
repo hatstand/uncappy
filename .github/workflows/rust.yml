@@ -18,7 +18,7 @@ jobs:
     - name: Install Windows toolchain
       run: rustup target add x86_64-pc-windows-gnu
     - name: Install Mingw-w64 toolchain
-      run: apt install binutils-mingw-w64-x86-64
+      run: sudo apt install binutils-mingw-w64-x86-64
     - uses: actions/checkout@v4
     - name: Run tests
       run: cargo test --verbose
