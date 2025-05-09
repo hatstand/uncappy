@@ -78,14 +78,7 @@ const TOOLTIP_DISABLED: &str = "Mapping disabled";
 thread_local! {
     // The low-level keyboard hook has no way to receive user data.
     // Fortunately, it should be called from the same thread as it was created in so we can rely on thread-local storage.
-    static UNCAPPY: RefCell<Uncappy> = RefCell::new(Uncappy {
-        instance: HINSTANCE(null_mut()),
-        window: HWND(null_mut()),
-        popup_menu: HMENU(null_mut()),
-        mapping: Mapping::DisableMapping,
-        guid: GUID::new().unwrap(),
-        icon_cache: HashMap::new(),
-    });
+    static UNCAPPY: RefCell<Option<Uncappy>> = const { RefCell::new(None) };
 }
 
 fn toggle_checked(current_state: MENU_ITEM_STATE) -> MENU_ITEM_STATE {
@@ -338,14 +331,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         debug!("Window created: {:?}", window);
 
         let guid = GUID::new()?;
-        UNCAPPY.set(Uncappy {
+        UNCAPPY.set(Some(Uncappy {
             instance: module.into(),
             window,
             popup_menu: create_popup_menu()?,
             mapping: Mapping::MapCapsToEscape,
             guid,
             icon_cache: HashMap::new(),
-        });
+        }));
 
         // Register a low-level keyboard hook that receives all keyboard events on the system.
         let hook_id = SetWindowsHookExA(WH_KEYBOARD_LL, Some(hook_callback), None, 0)?;
@@ -354,7 +347,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         });
 
         debug!("Loading icon");
-        let icon = UNCAPPY.with_borrow_mut(|uncappy| uncappy.load_icon("exit_icon"))?;
+        let icon =
+            UNCAPPY.with_borrow_mut(|uncappy| uncappy.as_mut().unwrap().load_icon("exit_icon"))?;
         debug!("adding to taskbar");
         let notify_icon_data = &mut NOTIFYICONDATAW {
             cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
@@ -516,7 +510,11 @@ unsafe extern "system" fn window_callback(
                     let mut cursor_pos = POINT::default();
                     GetCursorPos(&mut cursor_pos).unwrap();
                     UNCAPPY.with_borrow(|uncappy| {
-                        match uncappy.show_popup_menu(cursor_pos.x, cursor_pos.y) {
+                        match uncappy
+                            .as_ref()
+                            .unwrap()
+                            .show_popup_menu(cursor_pos.x, cursor_pos.y)
+                        {
                             Ok(_) => {
                                 debug!("Popup menu shown");
                             }
@@ -529,7 +527,7 @@ unsafe extern "system" fn window_callback(
                 }
                 NIN_SELECT => {
                     debug!("NIN_SELECT");
-                    UNCAPPY.with_borrow_mut(|uncappy| match uncappy.toggle() {
+                    UNCAPPY.with_borrow_mut(|uncappy| match uncappy.as_mut().unwrap().toggle() {
                         Ok(_) => {
                             debug!("Mapping toggled");
                         }
@@ -546,7 +544,7 @@ unsafe extern "system" fn window_callback(
             debug!("Menu Command received");
             let chosen = LOWORD(wparam.0 as isize) as u32;
             UNCAPPY.with_borrow_mut(|uncappy| {
-                let _ = uncappy.menu_selection(chosen);
+                let _ = uncappy.as_mut().unwrap().menu_selection(chosen);
             });
             LRESULT(0)
         }
@@ -559,5 +557,10 @@ unsafe extern "system" fn window_callback(
 }
 
 unsafe extern "system" fn hook_callback(ncode: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    UNCAPPY.with_borrow(|uncappy| uncappy.ll_keyboard_hook(ncode, wparam, lparam))
+    UNCAPPY.with_borrow(|uncappy| {
+        uncappy
+            .as_ref()
+            .unwrap()
+            .ll_keyboard_hook(ncode, wparam, lparam)
+    })
 }
