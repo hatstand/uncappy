@@ -1,5 +1,8 @@
 !include "MUI2.nsh"
 
+; Run Uncappy by default after installing.
+!define MUI_FINISHPAGE_RUN "$INSTDIR/uncappy.exe"
+
 ; Installer pages
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
