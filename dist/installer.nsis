@@ -1,0 +1,36 @@
+!include "MUI2.nsh"
+
+; Installer pages
+!insertmacro MUI_PAGE_WELCOME
+!insertmacro MUI_PAGE_DIRECTORY
+!insertmacro MUI_PAGE_INSTFILES
+!insertmacro MUI_PAGE_FINISH
+
+; Uninstaller pages
+!insertmacro MUI_UNPAGE_CONFIRM
+!insertmacro MUI_UNPAGE_INSTFILES  
+!insertmacro MUI_UNPAGE_FINISH
+
+!insertmacro MUI_LANGUAGE "English"
+
+Name "Uncappy"
+OutFile "uncappy_installer.exe"
+InstallDir "$PROGRAMFILES\Uncappy"
+
+ShowInstDetails show
+ShowUnInstDetails show
+
+Section
+    SetOutPath "$INSTDIR"
+    File /oname=uncappy.exe "target/x86_64-pc-windows-gnu/release/uncappy.exe"
+
+    CreateShortcut "$SMSTARTUP\uncappy.lnk" "$INSTDIR\uncappy.exe"
+    WriteUninstaller "$INSTDIR\Uninstall.exe"
+SectionEnd
+
+Section "Uninstall"
+    Delete $INSTDIR\uncappy.exe
+    Delete $SMSTARTUP\uncappy.lnk
+    Delete $INSTDIR\Uninstall.exe
+    RMDir $INSTDIR
+SectionEnd
