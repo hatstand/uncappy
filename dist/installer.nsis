@@ -16,7 +16,7 @@
 
 !insertmacro MUI_LANGUAGE "English"
 
-Name "Uncappy"
+Name "Uncappy ${VERSION}"
 OutFile "uncappy_installer.exe"
 InstallDir "$PROGRAMFILES\Uncappy"
 

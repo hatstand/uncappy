@@ -21,8 +21,10 @@ jobs:
     - name: Install clippy
       run: rustup component add clippy
     - name: Install Mingw-w64 toolchain
-      run: sudo apt install binutils-mingw-w64-x86-64 gcc-mingw-w64
+      run: sudo apt install binutils-mingw-w64-x86-64 gcc-mingw-w64 nsis
     - uses: actions/checkout@v4
+    - name: Run clippy
+      run: cargo clippy
     - name: Calendar Version
       id: calendar-version
       run: |
@@ -30,14 +32,20 @@ jobs:
         readonly VERSION="$(date +%Y%m%d)-${GITHUB_RUN_NUMBER}"
         echo "Version: $VERSION"
         echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-    - name: Build
+    - name: Build Binary
       run: cargo build --verbose --target x86_64-pc-windows-gnu -r
-    - name: Run clippy
-      run: cargo clippy
-    - name: Version release
+    - name: Build installer
+      env:
+        VERSION: ${{ steps.calendar-version.outputs.version }}
+      run: makensis -NOCD -DVERSION=${VERSION} dist/installer.nsis
+    - name: Version binary
       env:
         VERSION: ${{ steps.calendar-version.outputs.version }}
       run: cp target/x86_64-pc-windows-gnu/release/uncappy.exe uncappy-${VERSION}.exe
+    - name: Version installer
+      env:
+        VERSION: ${{ steps.calendar-version.outputs.version }}
+      run: cp uncappy_installer.exe uncappy-installer-${VERSION}.exe
     - uses: actions/upload-artifact@v4
       with:
         name: uncappy
