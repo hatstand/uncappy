@@ -292,6 +292,8 @@ fn to_pcwstr(s: &str) -> PCWSTR {
 
 fn main() -> Result<(), Box<dyn Error>> {
     env_logger::init();
+    let version: &str = option_env!("VERSION").unwrap_or("unknown");
+    info!("Uncappy version: {}", version);
     unsafe {
         let module = GetModuleHandleW(None)?;
         // Register a window class for the taskbar icon.

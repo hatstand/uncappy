@@ -31,6 +31,8 @@ jobs:
         echo "Version: $VERSION"
         echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
     - name: Build Binary
+      env:
+        VERSION: ${{ steps.calendar-version.outputs.version }}
       run: cargo build --verbose --target x86_64-pc-windows-gnu -r
     - name: Build installer
       env:
