@@ -311,8 +311,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             let _ = UnregisterClassW(class_name, Some(module.into()));
         });
 
-        // Create a message-only window.
-        // https://learn.microsoft.com/en-us/windows/win32/winmsg/window-features#message-only-windows
+        // Seems this needs to _not_ be a message-only window for ShellExecute to work.
         let window = CreateWindowExW(
             WINDOW_EX_STYLE(0),
             PCWSTR(class as *const u16),
