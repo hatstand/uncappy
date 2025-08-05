@@ -32,6 +32,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows_core::{BOOL, GUID, PCWSTR, PWSTR};
 
 const UNCAPPY_TASKBAR_CB_ID: u32 = WM_APP + 1;
+const UNCAPPY_TRAY_GUID: GUID = GUID::from_u128(0x0b55944f_ee68_4878_84cb_9a5ec85f7bf1);
 
 #[allow(non_snake_case)]
 pub fn LOWORD(l: isize) -> isize {
@@ -108,7 +109,7 @@ impl Drop for Uncappy {
 
 impl Uncappy {
     fn show_popup_menu(&self, x: i32, y: i32) -> Result<(), Box<dyn Error>> {
-        debug!("Showing popup menu at ({}, {})", x, y);
+        debug!("Showing popup menu at ({x}, {y})");
         unsafe {
             // Required to ensure the popup menu disappears again when a user clicks elsewhere.
             SetForegroundWindow(self.window).ok()?;
@@ -126,7 +127,7 @@ impl Uncappy {
     }
 
     fn menu_selection(&mut self, id: u32) -> Result<(), Box<dyn Error>> {
-        debug!("Menu item selected: {}", id);
+        debug!("Menu item selected: {id}");
         unsafe {
             match id {
                 POPUP_EXIT_ID => {
@@ -154,7 +155,7 @@ impl Uncappy {
                     );
                 }
                 _ => {
-                    debug!("Unknown menu item selected: {}", id);
+                    debug!("Unknown menu item selected: {id}");
                     return Ok(());
                 }
             }
@@ -164,10 +165,10 @@ impl Uncappy {
 
     unsafe fn load_icon(&mut self, icon_name: &str) -> Result<HICON, Box<dyn Error>> {
         if let Some(icon) = self.icon_cache.get(icon_name) {
-            debug!("Icon found in cache: {:?}", icon);
+            debug!("Icon found in cache: {icon:?}");
             return Ok(*icon);
         }
-        debug!("Loading icon: {}", icon_name);
+        debug!("Loading icon: {icon_name}");
         let icon = LoadIconW(Some(self.instance), to_pcwstr(icon_name))?;
         self.icon_cache.insert(icon_name.to_string(), icon);
         Ok(icon)
@@ -193,9 +194,9 @@ impl Uncappy {
         SetMenuItemInfoW(self.popup_menu, POPUP_ENABLE_ID, false, &mii)?;
 
         let icon_name = icon_for_mapping(&self.mapping);
-        debug!("Swapping icon to: {}", icon_name);
+        debug!("Swapping icon to: {icon_name}");
         let icon = self.load_icon(&icon_name)?;
-        debug!("Icon loaded: {:?}", icon);
+        debug!("Icon loaded: {icon:?}");
         Shell_NotifyIconW(
             NIM_MODIFY,
             &NOTIFYICONDATAW {
@@ -260,7 +261,7 @@ impl Uncappy {
                         error!("Failed to remap key: {:?}", GetLastError());
                     }
                     n => {
-                        error!("Failed to remap key: {:?}", n);
+                        error!("Failed to remap key: {n:?}");
                     }
                 }
                 LRESULT(1)
@@ -293,7 +294,7 @@ fn to_pcwstr(s: &str) -> PCWSTR {
 fn main() -> Result<(), Box<dyn Error>> {
     env_logger::init();
     let version: &str = option_env!("VERSION").unwrap_or("unknown");
-    info!("Uncappy version: {}", version);
+    info!("Uncappy version: {version}");
     unsafe {
         let module = GetModuleHandleW(None)?;
         // Register a window class for the taskbar icon.
@@ -305,7 +306,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             lpszClassName: class_name,
             ..Default::default()
         });
-        debug!("Class registered: {:?}", class);
+        debug!("Class registered: {class:?}");
         defer!({
             // Unregister the class when done.
             let _ = UnregisterClassW(class_name, Some(module.into()));
@@ -329,15 +330,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         .inspect_err(|err| {
             error!("Failed to create window: {:?} {:?}", err, GetLastError());
         })?;
-        debug!("Window created: {:?}", window);
+        debug!("Window created: {window:?}");
 
-        let guid = GUID::new()?;
         UNCAPPY.set(Some(Uncappy {
             instance: module.into(),
             window,
             popup_menu: create_popup_menu()?,
             mapping: Mapping::MapCapsToEscape,
-            guid,
+            guid: UNCAPPY_TRAY_GUID,
             icon_cache: HashMap::new(),
         }));
 
@@ -355,7 +355,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
             hWnd: window,
             hIcon: icon,
-            guidItem: guid,
+            guidItem: UNCAPPY_TRAY_GUID,
             // Both NIF_TIP & NIF_SHOWTIP are required to actually show the tooltip.
             uFlags: NIF_ICON | NIF_MESSAGE | NIF_GUID | NIF_TIP | NIF_SHOWTIP,
             uCallbackMessage: UNCAPPY_TASKBAR_CB_ID,
@@ -375,7 +375,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
                     uFlags: NIF_GUID,
                     hWnd: window,
-                    guidItem: guid,
+                    guidItem: UNCAPPY_TRAY_GUID,
                     ..Default::default()
                 },
             );
@@ -408,7 +408,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 unsafe fn create_popup_menu() -> Result<HMENU, Box<dyn Error>> {
     let menu = CreatePopupMenu()?;
-    debug!("Popup menu created: {:?}", menu);
+    debug!("Popup menu created: {menu:?}");
     // Add a menu item to exit the application.
     InsertMenuItemW(
         menu,
@@ -520,7 +520,7 @@ unsafe extern "system" fn window_callback(
                                 debug!("Popup menu shown");
                             }
                             Err(err) => {
-                                error!("Failed to show popup menu: {:?}", err);
+                                error!("Failed to show popup menu: {err:?}");
                             }
                         }
                     });
@@ -533,7 +533,7 @@ unsafe extern "system" fn window_callback(
                             debug!("Mapping toggled");
                         }
                         Err(err) => {
-                            error!("Failed to toggle mapping: {:?}", err);
+                            error!("Failed to toggle mapping: {err:?}");
                         }
                     });
                     LRESULT(0)
