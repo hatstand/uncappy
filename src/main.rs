@@ -82,6 +82,13 @@ thread_local! {
     static UNCAPPY: RefCell<Option<Uncappy>> = const { RefCell::new(None) };
 }
 
+fn is_dark_mode() -> Result<bool, Box<dyn Error>> {
+    let theme_key = windows_registry::CURRENT_USER
+        .open(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize")?;
+    let light_theme = theme_key.get_u32("AppsUseLightTheme")? == 1;
+    Ok(!light_theme)
+}
+
 fn toggle_checked(current_state: MENU_ITEM_STATE) -> MENU_ITEM_STATE {
     if current_state & MFS_CHECKED == MFS_CHECKED {
         current_state & !MFS_CHECKED
@@ -90,10 +97,10 @@ fn toggle_checked(current_state: MENU_ITEM_STATE) -> MENU_ITEM_STATE {
     }
 }
 
-fn icon_for_mapping(mapping: &Mapping) -> String {
+fn icon_for_mapping(mapping: &Mapping) -> (String, String) {
     match mapping {
-        Mapping::MapCapsToEscape => "exit_icon".to_string(),
-        Mapping::DisableMapping => "noexit_icon".to_string(),
+        Mapping::MapCapsToEscape => ("exit_icon".to_string(), "exit_icon_dark".to_string()),
+        Mapping::DisableMapping => ("noexit_icon".to_string(), "noexit_icon_dark".to_string()),
     }
 }
 
@@ -163,7 +170,16 @@ impl Uncappy {
         Ok(())
     }
 
-    unsafe fn load_icon(&mut self, icon_name: &str) -> Result<HICON, Box<dyn Error>> {
+    unsafe fn load_icon(
+        &mut self,
+        icon_name_light: &str,
+        icon_name_dark: &str,
+    ) -> Result<HICON, Box<dyn Error>> {
+        let icon_name = if is_dark_mode()? {
+            icon_name_dark
+        } else {
+            icon_name_light
+        };
         if let Some(icon) = self.icon_cache.get(icon_name) {
             debug!("Icon found in cache: {icon:?}");
             return Ok(*icon);
@@ -194,8 +210,7 @@ impl Uncappy {
         SetMenuItemInfoW(self.popup_menu, POPUP_ENABLE_ID, false, &mii)?;
 
         let icon_name = icon_for_mapping(&self.mapping);
-        debug!("Swapping icon to: {icon_name}");
-        let icon = self.load_icon(&icon_name)?;
+        let icon = self.load_icon(&icon_name.0, &icon_name.1)?;
         debug!("Icon loaded: {icon:?}");
         Shell_NotifyIconW(
             NIM_MODIFY,
@@ -348,8 +363,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         });
 
         debug!("Loading icon");
-        let icon =
-            UNCAPPY.with_borrow_mut(|uncappy| uncappy.as_mut().unwrap().load_icon("exit_icon"))?;
+        let icon = UNCAPPY.with_borrow_mut(|uncappy| {
+            uncappy
+                .as_mut()
+                .unwrap()
+                .load_icon("exit_icon", "exit_icon_dark")
+        })?;
         debug!("adding to taskbar");
         let notify_icon_data = &mut NOTIFYICONDATAW {
             cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,

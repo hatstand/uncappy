@@ -1,3 +1,5 @@
 uncappy_icon ICON "uncappy.ico"
 exit_icon ICON "exit.ico"
+exit_icon_dark ICON "exit_dark.ico"
 noexit_icon ICON "noexit.ico"
+noexit_icon_dark ICON "noexit_dark.ico"
