@@ -19,7 +19,7 @@ use windows::Win32::UI::Shell::{
     NOTIFYICONDATAW_0, NOTIFYICON_VERSION_4,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon,
+    CallNextHookEx, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
     DispatchMessageW, GetCursorPos, GetMenuItemInfoW, GetMessageW, InsertMenuItemW, LoadIconW,
     PostMessageW, PostQuitMessage, RegisterClassExW, SetForegroundWindow, SetMenuItemInfoW,
     SetWindowsHookExA, TrackPopupMenuEx, UnhookWindowsHookEx, UnregisterClassW, HICON, HMENU,
@@ -101,16 +101,6 @@ fn icon_for_mapping(mapping: &Mapping) -> (String, String) {
     match mapping {
         Mapping::MapCapsToEscape => ("exit_icon".to_string(), "exit_icon_dark".to_string()),
         Mapping::DisableMapping => ("noexit_icon".to_string(), "noexit_icon_dark".to_string()),
-    }
-}
-
-impl Drop for Uncappy {
-    fn drop(&mut self) {
-        unsafe {
-            self.icon_cache.iter().for_each(|(_, icon)| {
-                let _ = DestroyIcon(*icon);
-            });
-        }
     }
 }
 
